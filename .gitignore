@@ -1,0 +1,16 @@
+.env
+secrets/
+creds/
+ms_token.json
+*.token
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+dist/
+.pytest_cache/
+*.log
+postgres_data/
+repo-map.txt
+.freebuff/

@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: connectx_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: connectx_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: connectx_searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    volumes:
+      - searxng_data:/etc/searxng
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: connectx_backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+      - searxng
+    env_file:
+      - .env
+    ports:
+      - "${BACKEND_PORT}:8000"
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  postgres_data:
+  searxng_data:

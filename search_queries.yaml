@@ -1,0 +1,9 @@
+# Search queries for LinkedIn post monitoring
+# Each query will be executed against SearXNG (with DuckDuckGo fallback)
+
+queries:
+  - 'site:linkedin.com/posts ("hiring" OR "campus hiring" OR "internship" OR "freshers") AI ML'
+  - 'site:linkedin.com/posts "B.Tech" ("placement" OR "recruiting") AI "machine learning"'
+  - 'site:linkedin.com/posts ("AI engineer" OR "ML engineer") "fresher" OR "graduate"'
+  - 'site:linkedin.com/posts "campus recruitment" ("artificial intelligence" OR "data science")'
+  - 'site:linkedin.com/posts "internship" AI ML "computer science"'
