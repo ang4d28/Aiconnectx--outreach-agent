@@ -18,30 +18,29 @@ branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 
 
+def _enum(*values: str, name: str) -> postgresql.ENUM:
+    return postgresql.ENUM(*values, name=name, create_type=False)
+
+
+contact_role = _enum("recruiter", "founder", "hr", "md", "other", name="contact_role")
+post_status = _enum("new", "processed", "skipped", name="post_status")
+channel_type = _enum("linkedin", "email", name="channel_type")
+outreach_state = _enum(
+    "new", "qualified", "targeted", "enriched", "drafted", "contacted",
+    "replied", "interested", "no_opportunity", "wrong_person",
+    "not_now", "unsubscribed", "closed",
+    name="outreach_state",
+)
+message_direction = _enum("outbound", "inbound", name="message_direction")
+message_status = _enum("drafted", "sent", "failed", name="message_status")
+
+ALL_ENUMS = [contact_role, post_status, channel_type, outreach_state, message_direction, message_status]
+
+
 def _create_enums(bind: sa.connection) -> None:
-    """Create PostgreSQL enum types before tables that reference them."""
-    contact_role = sa.Enum("recruiter", "founder", "hr", "md", "other", name="contact_role")
-    contact_role.create(bind, checkfirst=True)
-
-    post_status = sa.Enum("new", "processed", "skipped", name="post_status")
-    post_status.create(bind, checkfirst=True)
-
-    channel_type = sa.Enum("linkedin", "email", name="channel_type")
-    channel_type.create(bind, checkfirst=True)
-
-    outreach_state = sa.Enum(
-        "new", "qualified", "targeted", "enriched", "drafted", "contacted",
-        "replied", "interested", "no_opportunity", "wrong_person",
-        "not_now", "unsubscribed", "closed",
-        name="outreach_state",
-    )
-    outreach_state.create(bind, checkfirst=True)
-
-    message_direction = sa.Enum("outbound", "inbound", name="message_direction")
-    message_direction.create(bind, checkfirst=True)
-
-    message_status = sa.Enum("drafted", "sent", "failed", name="message_status")
-    message_status.create(bind, checkfirst=True)
+    """Create each PostgreSQL enum type exactly once, before the tables that use it."""
+    for enum in ALL_ENUMS:
+        enum.create(bind, checkfirst=True)
 
 
 def _drop_enums(bind: sa.connection) -> None:
@@ -81,7 +80,7 @@ def upgrade() -> None:
         sa.Column("email", sa.String(255), unique=True),
         sa.Column("linkedin_url", sa.String(500)),
         sa.Column("title", sa.String(255)),
-        sa.Column("role", sa.Enum(name="contact_role"), nullable=False, server_default="other"),
+        sa.Column("role", contact_role, nullable=False, server_default="other"),
         sa.Column("is_unsubscribed", sa.Boolean, nullable=False, server_default=sa.text("false")),
         sa.Column("last_touch_at", postgresql.TIMESTAMP(timezone=True)),
         sa.Column("created_at", postgresql.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -99,7 +98,7 @@ def upgrade() -> None:
         sa.Column("roles", postgresql.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column("raw_text", sa.Text),
         sa.Column("relevance_score", sa.Float, nullable=False, server_default=sa.text("0.0")),
-        sa.Column("status", sa.Enum(name="post_status"), nullable=False, server_default="new"),
+        sa.Column("status", post_status, nullable=False, server_default="new"),
         sa.Column("created_at", postgresql.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
 
@@ -108,8 +107,8 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("contact_id", sa.Integer, sa.ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False),
         sa.Column("post_id", sa.Integer, sa.ForeignKey("posts.id", ondelete="SET NULL")),
-        sa.Column("channel", sa.Enum(name="channel_type"), nullable=False),
-        sa.Column("state", sa.Enum(name="outreach_state"), nullable=False, server_default="new"),
+        sa.Column("channel", channel_type, nullable=False),
+        sa.Column("state", outreach_state, nullable=False, server_default="new"),
         sa.Column("sent_at", postgresql.TIMESTAMP(timezone=True)),
         sa.Column("follow_up_due", postgresql.TIMESTAMP(timezone=True)),
         sa.Column("follow_up_count", sa.Integer, nullable=False, server_default=sa.text("0")),
@@ -121,10 +120,10 @@ def upgrade() -> None:
         "messages",
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("outreach_id", sa.Integer, sa.ForeignKey("outreaches.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("direction", sa.Enum(name="message_direction"), nullable=False),
+        sa.Column("direction", message_direction, nullable=False),
         sa.Column("content", sa.Text, nullable=False),
         sa.Column("sent_at", postgresql.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("status", sa.Enum(name="message_status"), nullable=False, server_default="drafted"),
+        sa.Column("status", message_status, nullable=False, server_default="drafted"),
         sa.Column("created_at", postgresql.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
 
