@@ -110,6 +110,11 @@ class AuthProvider(str, enum.Enum):
     MICROSOFT = "microsoft"
 
 
+def _pg_enum(enum_class: type[enum.Enum], name: str) -> Enum:
+    """Native Postgres enum that stores the lowercase values, as the migrations create them."""
+    return Enum(enum_class, name=name, values_callable=lambda members: [member.value for member in members])
+
+
 def _lowercase_enum(enum_class: type[enum.Enum], length: int = 20) -> Enum:
     """VARCHAR column holding the lowercase values (no native Postgres enum type to migrate)."""
     return Enum(
@@ -182,7 +187,7 @@ class Contact(Base):
     linkedin_url: Mapped[str | None] = mapped_column(String(500))
     title: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[ContactRole] = mapped_column(
-        Enum(ContactRole, name="contact_role"), default=ContactRole.OTHER
+        _pg_enum(ContactRole, "contact_role"), default=ContactRole.OTHER
     )
     is_unsubscribed: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -218,7 +223,7 @@ class Post(Base):
     raw_text: Mapped[str | None] = mapped_column(Text)
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[PostStatus] = mapped_column(
-        Enum(PostStatus, name="post_status"), default=PostStatus.NEW
+        _pg_enum(PostStatus, "post_status"), default=PostStatus.NEW
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -239,10 +244,10 @@ class Outreach(Base):
         Integer, ForeignKey("posts.id", ondelete="SET NULL")
     )
     channel: Mapped[ChannelType] = mapped_column(
-        Enum(ChannelType, name="channel_type")
+        _pg_enum(ChannelType, "channel_type")
     )
     state: Mapped[OutreachState] = mapped_column(
-        Enum(OutreachState, name="outreach_state"),
+        _pg_enum(OutreachState, "outreach_state"),
         default=OutreachState.NEW,
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -270,19 +275,19 @@ class Message(Base):
         Integer, ForeignKey("outreaches.id", ondelete="CASCADE"), nullable=False
     )
     direction: Mapped[MessageDirection] = mapped_column(
-        Enum(MessageDirection, name="message_direction")
+        _pg_enum(MessageDirection, "message_direction")
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     status: Mapped[MessageStatus] = mapped_column(
-        Enum(MessageStatus, name="message_status"),
+        _pg_enum(MessageStatus, "message_status"),
         default=MessageStatus.DRAFTED,
     )
     hold_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_status: Mapped[ReviewStatus] = mapped_column(
-        Enum(ReviewStatus, name="review_status"),
+        _pg_enum(ReviewStatus, "review_status"),
         default=ReviewStatus.PENDING_REVIEW,
         server_default=ReviewStatus.PENDING_REVIEW.value,
         nullable=False,
@@ -313,11 +318,11 @@ class AttentionItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[AttentionType] = mapped_column(
-        Enum(AttentionType, name="attention_type"), nullable=False
+        _pg_enum(AttentionType, "attention_type"), nullable=False
     )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     status: Mapped[AttentionStatus] = mapped_column(
-        Enum(AttentionStatus, name="attention_status"),
+        _pg_enum(AttentionStatus, "attention_status"),
         default=AttentionStatus.OPEN,
         server_default=AttentionStatus.OPEN.value,
         nullable=False,

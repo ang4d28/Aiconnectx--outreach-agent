@@ -145,3 +145,29 @@ def test_table_definition_matches_migration():
 
     migration = import_module("app.db.alembic.versions.005_inquiries")
     assert migration.down_revision == "004_future_pool"
+
+
+class TestStoredInquiry:
+    """Runs the route against a real database session (no mocks) so ORM/enum mapping is exercised."""
+
+    def test_valid_inquiry_is_stored(self, db, monkeypatch):
+        monkeypatch.setattr("app.workers.review.whatsapp_notify", AsyncMock())
+        monkeypatch.setattr(inquiries, "limiter", RateLimiter())
+        app = FastAPI()
+        app.include_router(inquiries.router, prefix="/api")
+        app.dependency_overrides[get_session] = lambda: db
+        r = TestClient(app).post("/api/inquiries", json=VALID)
+        assert r.status_code == 201
+        stored = db.query(Inquiry).one()
+        assert (stored.name, stored.email, stored.interest) == ("Asha Rao", "asha@example.com", "partner")
+        item = db.query(AttentionItem).one()
+        assert item.type == AttentionType.NEEDS_MANUAL and item.payload["inquiry_id"] == stored.id
+
+    def test_invalid_input_is_a_422(self, setup):
+        client, _, _, _ = setup
+        assert client.post("/api/inquiries", json={**VALID, "email": "nope"}).status_code == 422
+
+    def test_postgres_enums_bind_lowercase_values(self):
+        # The migrations create lowercase enum labels; the models must send those, not member names.
+        col = AttentionItem.__table__.c.type.type
+        assert col.enums == ["interested", "question", "channel_error", "needs_manual"]
