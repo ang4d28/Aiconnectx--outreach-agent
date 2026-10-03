@@ -10,6 +10,7 @@ import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.channels.base import IncomingReply, Thread
+from app.config import ENV_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 class OutlookSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ROOT / ".env"), env_file_encoding="utf-8", extra="ignore"
+        env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore"
     )
 
     ms_client_id: str = ""

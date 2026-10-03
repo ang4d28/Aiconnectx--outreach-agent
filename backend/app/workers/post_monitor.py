@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import SessionLocal, repository
 from app.db.models import PostStatus
-from app.db.schemas import PostCreate
+from app.db.schemas import CompanyCreate, PostCreate
 from app.llm.client import llm_client
 from app.llm.prompts import PostExtractionResult, extract_post_prompt
 
@@ -239,7 +240,7 @@ class PostMonitor:
             # Create post data
             post_data = PostCreate(
                 url=url,
-                company_id=None,  # Will be enriched later
+                company_id=self._resolve_company(extraction.company),
                 poster_name=extraction.poster_name,
                 poster_profile_url=None,
                 poster_title=extraction.poster_title,
@@ -255,8 +256,39 @@ class PostMonitor:
             logger.error(f"LLM extraction failed for {url}: {e}")
             return None
 
+    def _resolve_company(self, name: str | None) -> int | None:
+        """Find or create the company named in a post so targeting can pick a contact."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        try:
+            company = repository.get_company_by_name(self.db, name) or repository.create_company(
+                self.db, CompanyCreate(name=name[:255])
+            )
+        except Exception as e:
+            logger.error(f"Could not save company '{name}': {e}")
+            self.db.rollback()
+            return None
+        return company.id if isinstance(company.id, int) else None
+
+    def _stored_queries(self) -> list[str] | None:
+        """Queries edited on the dashboard (settings table) win over the YAML file."""
+        try:
+            row = repository.get_setting(self.db, "search_queries")
+            raw = getattr(row, "value", None)
+            queries = json.loads(raw) if isinstance(raw, str) else None
+        except Exception as e:
+            logger.warning(f"Could not read stored search queries: {e}")
+            return None
+        if isinstance(queries, list) and queries and all(isinstance(q, str) for q in queries):
+            return queries
+        return None
+
     def _load_queries(self) -> list[str]:
-        """Load search queries from YAML file or use defaults."""
+        """Load search queries (dashboard setting, else YAML file, else defaults)."""
+        stored = self._stored_queries()
+        if stored:
+            return stored
         if not QUERIES_FILE.exists():
             logger.info(f"No queries file found at {QUERIES_FILE}, using defaults")
             return DEFAULT_QUERIES

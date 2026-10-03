@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -45,6 +46,7 @@ class OutreachState(str, enum.Enum):
     NO_OPPORTUNITY = "no_opportunity"
     WRONG_PERSON = "wrong_person"
     NOT_NOW = "not_now"
+    FUTURE_POOL = "future_pool"
     UNSUBSCRIBED = "unsubscribed"
     CLOSED = "closed"
 
@@ -92,6 +94,58 @@ class PostStatus(str, enum.Enum):
     NEW = "new"
     PROCESSED = "processed"
     SKIPPED = "skipped"
+
+
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    MEMBER = "member"
+    VIEWER = "viewer"
+    PENDING = "pending"
+    DISABLED = "disabled"
+
+
+class AuthProvider(str, enum.Enum):
+    PASSWORD = "password"
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"
+
+
+def _lowercase_enum(enum_class: type[enum.Enum], length: int = 20) -> Enum:
+    """VARCHAR column holding the lowercase values (no native Postgres enum type to migrate)."""
+    return Enum(
+        enum_class,
+        native_enum=False,
+        length=length,
+        values_callable=lambda members: [member.value for member in members],
+        validate_strings=True,
+    )
+
+
+class User(Base):
+    """A dashboard account. Accounts are never linked across providers, not even by email."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_subject", name="uq_users_provider_subject"),
+        UniqueConstraint("provider", "email", name="uq_users_provider_email"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    provider: Mapped[AuthProvider] = mapped_column(_lowercase_enum(AuthProvider), nullable=False)
+    provider_subject: Mapped[str | None] = mapped_column(String(255))
+    role: Mapped[UserRole] = mapped_column(
+        _lowercase_enum(UserRole),
+        default=UserRole.PENDING,
+        server_default=UserRole.PENDING.value,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Company(Base):
@@ -236,6 +290,10 @@ class Message(Base):
     edited_text: Mapped[str | None] = mapped_column(Text)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     whatsapp_message_id: Mapped[str | None] = mapped_column(String(255))
+    # Dashboard user who last approved, cancelled or edited it (empty for WhatsApp and automatic actions).
+    reviewed_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -264,6 +322,9 @@ class AttentionItem(Base):
         server_default=AttentionStatus.OPEN.value,
         nullable=False,
     )
+    resolved_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -276,5 +337,22 @@ class NotificationLog(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Inquiry(Base):
+    """Contact-form submission from the public landing page."""
+
+    __tablename__ = "inquiries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(160))
+    phone: Mapped[str | None] = mapped_column(String(40))
+    interest: Mapped[str] = mapped_column(String(20), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

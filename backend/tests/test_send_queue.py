@@ -18,15 +18,25 @@ from app.channels.outlook import (
     retry_after_seconds,
     with_unsubscribe,
 )
-from app.db.models import MessageStatus, OutreachState
+from app.db.models import (
+    AttentionType,
+    ChannelType,
+    MessageStatus,
+    OutreachState,
+    ReviewStatus,
+)
 from app.workers import send_queue
 from app.workers.send_queue import (
     SendQueue,
+    connect_expired,
+    daily_cap,
     email_daily_cap,
     in_send_window,
     next_follow_up,
+    on_dnc,
     on_dnc_list,
     parse_dnc,
+    route_channel,
     touched_recently,
 )
 
@@ -75,22 +85,26 @@ class TestGuardrailHelpers:
 # ─── Send queue ────────────────────────────────────────────
 
 
-def make_message(msg_id: int, outreach_id: int):
+def make_message(msg_id: int, outreach_id: int, held=True, review=ReviewStatus.PENDING_REVIEW):
     return SimpleNamespace(
-        id=msg_id, outreach_id=outreach_id, content="Hello", status=MessageStatus.APPROVED
+        id=msg_id, outreach_id=outreach_id, content="Hello", edited_text=None,
+        status=MessageStatus.APPROVED, review_status=review,
+        hold_until=IN_WINDOW - timedelta(minutes=1) if held else None,
+        whatsapp_message_id=None, reviewed_at=None,
     )
 
 
-def make_outreach(outreach_id: int, state=OutreachState.DRAFTED):
+def make_outreach(outreach_id: int, state=OutreachState.DRAFTED, channel=ChannelType.EMAIL):
     return SimpleNamespace(
-        id=outreach_id, contact_id=outreach_id, state=state,
+        id=outreach_id, contact_id=outreach_id, state=state, channel=channel,
         sent_at=None, follow_up_count=0, follow_up_due=None,
     )
 
 
 def make_contact(contact_id: int, email="hr@acme.com", **kw):
     return SimpleNamespace(
-        id=contact_id, company_id=1, email=email,
+        id=contact_id, company_id=1, email=email, name=f"Person {contact_id}",
+        linkedin_url=kw.get("linkedin"),
         is_unsubscribed=kw.get("unsub", False), last_touch_at=kw.get("last_touch"),
     )
 
@@ -99,22 +113,38 @@ class QueueHarness:
     def __init__(self, messages, outreaches, contacts, settings_map=None, **kw):
         self.client = MagicMock()
         self.client.send_email = AsyncMock(return_value="conv-1")
+        self.linkedin = MagicMock()
+        self.linkedin.send_connection_note = AsyncMock(return_value=None)
+        self.linkedin.send_dm = AsyncMock(return_value=None)
+        self.review = MagicMock()
+        self.review.start_hold = AsyncMock()
+        self.reporter = MagicMock()
+        self.reporter.record_send = AsyncMock()
+        self.reporter.flush = AsyncMock()
         self.sleep = AsyncMock()
         self.settings_map = settings_map or {}
+        self.db = MagicMock()
         self.queue = SendQueue(
-            db=MagicMock(),
+            db=self.db,
             client=self.client,
             dry_run=kw.get("dry_run", False),
             sleep=self.sleep,
             clock=lambda: kw.get("now", IN_WINDOW),
             rng=random.Random(1),
+            linkedin=self.linkedin,
+            review=self.review,
+            reporter=self.reporter,
         )
         q = self.queue
-        q._approved_email_messages = lambda: messages
+        q._approved_messages = lambda: messages
+        q._pending_connects = lambda: kw.get("pending_connects", [])
         q._setting = lambda key: self.settings_map.get(key)
         q._set_setting = lambda key, value: self.settings_map.__setitem__(key, value)
-        q._sent_today = lambda now: kw.get("sent_today", 0)
-        q._first_send_at = lambda: kw.get("first_send_at")
+        sent_today = kw.get("sent_today", 0)
+        q._sent_today = lambda now, channel: (
+            sent_today.get(channel, 0) if isinstance(sent_today, dict) else sent_today
+        )
+        q._first_send_at = lambda channel: kw.get("first_send_at")
         q._company_unsubscribed = lambda company_id: kw.get("company_unsub", False)
         repo = send_queue.repository
         self.patches = [
@@ -257,6 +287,199 @@ class TestSendQueue:
         report = await h.run()
         assert report.sent == 1
         assert report.stopped == "paused"
+
+
+# ─── Routing, hold window, review ──────────────────────────
+
+
+class TestRoutingHelpers:
+    def test_route_keeps_drafted_channel_when_reachable(self):
+        both = make_contact(1, linkedin="https://linkedin.com/in/a")
+        assert route_channel(both, ChannelType.EMAIL) == ChannelType.EMAIL
+        assert route_channel(both, ChannelType.LINKEDIN) == ChannelType.LINKEDIN
+
+    def test_route_falls_back(self):
+        li_only = make_contact(1, email=None, linkedin="https://linkedin.com/in/a")
+        assert route_channel(li_only, ChannelType.EMAIL) == ChannelType.LINKEDIN
+        assert route_channel(make_contact(1), ChannelType.LINKEDIN) == ChannelType.EMAIL
+        assert route_channel(make_contact(1, email=None), ChannelType.EMAIL) is None
+
+    def test_dnc_matches_linkedin_profile(self):
+        contact = make_contact(1, email=None, linkedin="https://LinkedIn.com/in/Boss/")
+        assert on_dnc(contact, parse_dnc("https://linkedin.com/in/boss"))
+        assert not on_dnc(contact, parse_dnc("other@acme.com"))
+
+    def test_caps_counted_per_channel(self):
+        old = IN_WINDOW - timedelta(days=30)
+        assert daily_cap(ChannelType.LINKEDIN, None, IN_WINDOW) == 20
+        assert daily_cap(ChannelType.LINKEDIN, old, IN_WINDOW) == 40
+
+    def test_connect_expiry(self):
+        assert connect_expired(IN_WINDOW - timedelta(days=14), IN_WINDOW)
+        assert not connect_expired(IN_WINDOW - timedelta(days=13), IN_WINDOW)
+        assert not connect_expired(None, IN_WINDOW)
+
+
+class TestHoldAndRelease:
+    @pytest.mark.asyncio
+    async def test_new_approval_starts_hold_and_does_not_send(self):
+        messages = [make_message(1, 1, held=False)]
+        h = QueueHarness(messages, {1: make_outreach(1)}, {1: make_contact(1)})
+        report = await h.run()
+        assert report.held == 1 and report.sent == 0
+        h.review.start_hold.assert_awaited_once_with(messages[0], ChannelType.EMAIL, "Person 1", "Acme")
+        h.client.send_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hold_not_passed_waits(self):
+        message = make_message(1, 1)
+        message.hold_until = IN_WINDOW + timedelta(minutes=5)
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1)})
+        report = await h.run()
+        assert report.waiting == 1
+        h.client.send_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_release_after_hold(self):
+        h, messages, _, _ = simple_setup(1)
+        report = await h.run()
+        assert report.sent == 1
+        assert messages[0].review_status == ReviewStatus.AUTO_RELEASED
+
+    @pytest.mark.asyncio
+    async def test_owner_approved_keeps_review_status(self):
+        message = make_message(1, 1, review=ReviewStatus.APPROVED)
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1)})
+        await h.run()
+        assert message.status == MessageStatus.SENT
+        assert message.review_status == ReviewStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_cancelled_never_sends(self):
+        message = make_message(1, 1, review=ReviewStatus.CANCELLED)
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1)})
+        report = await h.run()
+        assert report.sent == 0
+        h.client.send_email.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_edited_text_is_sent(self):
+        message = make_message(1, 1, review=ReviewStatus.EDITED)
+        message.edited_text = "New text"
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1)})
+        await h.run()
+        assert h.client.send_email.await_args.args[2] == "New text"
+
+    @pytest.mark.asyncio
+    async def test_released_hold_outside_window_waits(self):
+        late = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)  # 17:30 IST
+        message = make_message(1, 1)
+        message.hold_until = late - timedelta(minutes=1)
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1)}, now=late)
+        report = await h.run()
+        assert report.stopped == "outside_window"
+        h.client.send_email.assert_not_called()
+        assert message.status == MessageStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_holds_start_even_when_paused(self):
+        messages = [make_message(1, 1, held=False)]
+        h = QueueHarness(messages, {1: make_outreach(1)}, {1: make_contact(1)},
+                         settings_map={"global_pause": "true"})
+        report = await h.run()
+        assert report.held == 1 and report.stopped == "paused"
+
+
+class TestRouting:
+    @pytest.mark.asyncio
+    async def test_no_channel_goes_to_needs_manual(self):
+        message = make_message(1, 1, held=False)
+        h = QueueHarness([message], {1: make_outreach(1)}, {1: make_contact(1, email=None)})
+        report = await h.run()
+        assert report.needs_manual == 1
+        item = h.db.add.call_args.args[0]
+        assert item.type == AttentionType.NEEDS_MANUAL
+        assert item.payload["message_id"] == 1
+        assert message.status == MessageStatus.FAILED
+        h.review.start_hold.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reroutes_to_reachable_channel(self):
+        outreach = make_outreach(1, channel=ChannelType.LINKEDIN)
+        h = QueueHarness([make_message(1, 1, held=False)], {1: outreach}, {1: make_contact(1)})
+        await h.run()
+        assert outreach.channel == ChannelType.EMAIL
+
+    @pytest.mark.asyncio
+    async def test_linkedin_connect_request(self):
+        outreach = make_outreach(1, channel=ChannelType.LINKEDIN)
+        contact = make_contact(1, email=None, linkedin="https://linkedin.com/in/a")
+        h = QueueHarness([make_message(1, 1)], {1: outreach}, {1: contact})
+        report = await h.run()
+        assert report.sent == 1
+        h.linkedin.send_connection_note.assert_awaited_once_with("https://linkedin.com/in/a", "Hello")
+        h.client.send_email.assert_not_called()
+        assert outreach.state == OutreachState.CONNECT_SENT
+        assert outreach.follow_up_due is None
+
+    @pytest.mark.asyncio
+    async def test_linkedin_first_dm_after_connect(self):
+        outreach = make_outreach(1, state=OutreachState.CONNECTED, channel=ChannelType.LINKEDIN)
+        contact = make_contact(1, email=None, linkedin="https://linkedin.com/in/a",
+                               last_touch=IN_WINDOW - timedelta(days=2))
+        h = QueueHarness([make_message(1, 1)], {1: outreach}, {1: contact})
+        report = await h.run()
+        assert report.sent == 1
+        h.linkedin.send_dm.assert_awaited_once()
+        assert outreach.state == OutreachState.DM_SENT
+        assert outreach.follow_up_due == IN_WINDOW + timedelta(days=4)
+
+    @pytest.mark.asyncio
+    async def test_long_connection_note_needs_manual(self):
+        message = make_message(1, 1)
+        message.content = "x" * 201
+        outreach = make_outreach(1, channel=ChannelType.LINKEDIN)
+        contact = make_contact(1, email=None, linkedin="https://linkedin.com/in/a")
+        h = QueueHarness([message], {1: outreach}, {1: contact})
+        report = await h.run()
+        assert report.needs_manual == 1
+        h.linkedin.send_connection_note.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disabled_linkedin_leaves_message_queued(self):
+        outreach = make_outreach(1, channel=ChannelType.LINKEDIN)
+        contact = make_contact(1, email=None, linkedin="https://linkedin.com/in/a")
+        message = make_message(1, 1)
+        h = QueueHarness([message], {1: outreach}, {1: contact})
+        h.linkedin.available = False
+        report = await h.run()
+        assert report.skipped == 1
+        assert message.status == MessageStatus.APPROVED
+        assert outreach.state == OutreachState.DRAFTED
+
+    @pytest.mark.asyncio
+    async def test_caps_are_per_channel(self):
+        messages = [make_message(1, 1), make_message(2, 2)]
+        outreaches = {1: make_outreach(1), 2: make_outreach(2, channel=ChannelType.LINKEDIN)}
+        contacts = {1: make_contact(1), 2: make_contact(2, email=None, linkedin="https://linkedin.com/in/b")}
+        h = QueueHarness(messages, outreaches, contacts, sent_today={ChannelType.EMAIL: 20})
+        report = await h.run()
+        assert report.stopped == "daily_cap"
+        assert report.sent == 1
+        h.client.send_email.assert_not_called()
+        h.linkedin.send_connection_note.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stale_connect_requests_closed(self):
+        stale = make_outreach(1, state=OutreachState.CONNECT_SENT, channel=ChannelType.LINKEDIN)
+        stale.sent_at = IN_WINDOW - timedelta(days=15)
+        fresh = make_outreach(2, state=OutreachState.CONNECT_SENT, channel=ChannelType.LINKEDIN)
+        fresh.sent_at = IN_WINDOW - timedelta(days=3)
+        h = QueueHarness([], {}, {}, pending_connects=[stale, fresh])
+        report = await h.run()
+        assert report.closed == 1
+        assert stale.state == OutreachState.CLOSED
+        assert fresh.state == OutreachState.CONNECT_SENT
 
 
 # ─── Outlook / Graph ───────────────────────────────────────

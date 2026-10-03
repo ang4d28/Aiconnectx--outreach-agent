@@ -5,9 +5,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.deps import get_current_user
 from app.config import settings
 from app.db import get_session, repository
-from app.db.models import ChannelType, Message, MessageStatus, Outreach
+from app.db.models import ChannelType, Message, MessageStatus, Outreach, User
 from app.db.schemas import MessageUpdate
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
@@ -55,10 +56,16 @@ def channel_of(db: Session, message: Message) -> ChannelType:
     return repository.get_outreach(db, message.outreach_id).channel
 
 
-def set_status(db: Session, message: Message, new_status: MessageStatus) -> DraftRead:
+def set_status(db: Session, message: Message, new_status: MessageStatus, user: User) -> DraftRead:
     require_pending(message)
     updated = repository.update_message(db, message, MessageUpdate(status=new_status))
-    return to_read(updated, channel_of(db, updated))
+    return record_reviewer(db, updated, user)
+
+
+def record_reviewer(db: Session, message: Message, user: User) -> DraftRead:
+    message.reviewed_by = user.id
+    db.commit()
+    return to_read(message, channel_of(db, message))
 
 
 @router.get("", response_model=list[DraftRead])
@@ -80,20 +87,27 @@ def list_drafts(
 
 
 @router.post("/{draft_id}/approve", response_model=DraftRead)
-def approve_draft(draft_id: int, db: Session = Depends(get_session)) -> DraftRead:
-    return set_status(db, get_draft_or_404(db, draft_id), MessageStatus.APPROVED)
+def approve_draft(
+    draft_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_session)
+) -> DraftRead:
+    return set_status(db, get_draft_or_404(db, draft_id), MessageStatus.APPROVED, user)
 
 
 @router.post("/{draft_id}/reject", response_model=DraftRead)
-def reject_draft(draft_id: int, db: Session = Depends(get_session)) -> DraftRead:
-    return set_status(db, get_draft_or_404(db, draft_id), MessageStatus.REJECTED)
+def reject_draft(
+    draft_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_session)
+) -> DraftRead:
+    return set_status(db, get_draft_or_404(db, draft_id), MessageStatus.REJECTED, user)
 
 
 @router.patch("/{draft_id}", response_model=DraftRead)
 def edit_draft(
-    draft_id: int, data: DraftEdit, db: Session = Depends(get_session)
+    draft_id: int,
+    data: DraftEdit,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session),
 ) -> DraftRead:
     message = get_draft_or_404(db, draft_id)
     require_pending(message)
     updated = repository.update_message(db, message, MessageUpdate(content=data.content))
-    return to_read(updated, channel_of(db, updated))
+    return record_reviewer(db, updated, user)

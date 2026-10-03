@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import drafts
+from app.auth.deps import get_current_user
 from app.db import get_session
 from app.db.models import ChannelType, MessageStatus, OutreachState
 from app.workers import drafter
@@ -120,6 +121,7 @@ class TestDraftsApi:
         app = FastAPI()
         app.include_router(drafts.router)
         app.dependency_overrides[get_session] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=7, role="member")
         outreach = SimpleNamespace(channel=ChannelType.EMAIL)
 
         def update(_db, msg, data):
