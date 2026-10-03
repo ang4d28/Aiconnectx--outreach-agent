@@ -55,12 +55,12 @@ class WhatsAppClient:
         now = now or datetime.now(timezone.utc)
         return now - self.last_inbound_at < SERVICE_WINDOW
 
-    async def _post(self, payload: dict) -> str | None:
+    async def _post(self, payload: dict, to: str | None = None) -> str | None:
         url = f"{GRAPH_URL}/{settings.whatsapp_phone_number_id}/messages"
         headers = {"Authorization": f"Bearer {settings.whatsapp_token}"}
         body = {
             "messaging_product": "whatsapp",
-            "to": normalize_number(settings.whatsapp_owner_number),
+            "to": normalize_number(to or settings.whatsapp_owner_number),
             **payload,
         }
         if self._client is not None:
@@ -73,21 +73,23 @@ class WhatsAppClient:
         messages = resp.json().get("messages") or []
         return messages[0].get("id") if messages else None
 
-    async def send_template(self, name: str, params: list[str] | None = None) -> str | None:
+    async def send_template(
+        self, name: str, params: list[str] | None = None, to: str | None = None
+    ) -> str | None:
         template: dict = {"name": name, "language": {"code": TEMPLATE_LANGUAGE}}
         if params:
             template["components"] = [
                 {"type": "body", "parameters": [{"type": "text", "text": p} for p in params]}
             ]
-        return await self._post({"type": "template", "template": template})
+        return await self._post({"type": "template", "template": template}, to)
 
-    async def send_text(self, text: str) -> str | None:
-        """Free text inside the 24h window, otherwise the fallback template."""
+    async def send_text(self, text: str, to: str | None = None) -> str | None:
+        """Free text inside the 24h window, otherwise the fallback template. `to` defaults to the owner."""
         if self.window_open():
-            return await self._post({"type": "text", "text": {"body": text, "preview_url": False}})
+            return await self._post({"type": "text", "text": {"body": text, "preview_url": False}}, to)
         # Template body parameters cannot contain newlines or runs of spaces.
         flat = " ".join(text.split())
-        return await self.send_template(FALLBACK_TEMPLATE, [flat])
+        return await self.send_template(FALLBACK_TEMPLATE, [flat], to)
 
 
 whatsapp_client = WhatsAppClient()

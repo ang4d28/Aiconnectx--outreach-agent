@@ -625,6 +625,23 @@ class TestAdminUsers:
         db.refresh(admin)
         assert admin.role == UserRole.ADMIN
 
+    def test_last_admin_cannot_be_demoted_or_disabled(self, db, admin):
+        from fastapi import HTTPException
+
+        from app.api.admin_users import keep_one_admin
+
+        with pytest.raises(HTTPException) as exc:
+            keep_one_admin(db, admin, "demote")
+        assert exc.value.status_code == 409
+        add_user(db, "second@example.test", UserRole.ADMIN)
+        keep_one_admin(db, admin, "demote")  # a second admin exists: allowed
+
+    def test_an_admin_can_promote_and_demote_another_admin(self, app, db, admin):
+        member = add_user(db, "m@example.test", UserRole.MEMBER)
+        http = client_for(app, admin)
+        assert http.patch(f"/api/admin/users/{member.id}/role", json={"role": "admin"}).json()["role"] == "admin"
+        assert http.patch(f"/api/admin/users/{member.id}/role", json={"role": "viewer"}).json()["role"] == "viewer"
+
     def test_disable_locks_the_user_out_everywhere(self, app, db, admin):
         victim = add_user(db, "m@example.test", UserRole.MEMBER)
         victim_client = client_for(app, victim)
@@ -661,6 +678,52 @@ class TestAdminUsers:
         assert http.post(f"/api/admin/users/{user.id}/reset-password", json={"password": "short"}).status_code == 422
         assert http.post(f"/api/admin/users/{oauth_user.id}/reset-password").status_code == 400
         assert http.post("/api/admin/users/999/reset-password").status_code == 404
+
+
+class TestAdminLogin:
+    def login(self, app, email, password=PASSWORD, admin_only=True):
+        return TestClient(app, headers=CSRF).post(
+            "/api/auth/login", json={"email": email, "password": password, "admin_only": admin_only}
+        )
+
+    @pytest.mark.parametrize("role", [UserRole.MEMBER, UserRole.VIEWER, UserRole.PENDING])
+    def test_non_admins_get_403_and_no_session(self, app, db, role):
+        add_user(db, "m@example.test", role)
+        r = self.login(app, "m@example.test")
+        assert r.status_code == 403 and r.json()["detail"] == "This account is not an administrator"
+        assert security.SESSION_COOKIE not in r.headers.get("set-cookie", "")
+
+    def test_admin_can_sign_in(self, app, db):
+        add_user(db, "boss@example.test", UserRole.ADMIN)
+        r = self.login(app, "boss@example.test")
+        assert r.status_code == 200 and r.json()["user"]["role"] == "admin"
+
+    def test_errors_stay_generic_before_the_password_is_proven(self, app, db):
+        add_user(db, "m@example.test", UserRole.MEMBER)
+        assert self.login(app, "m@example.test", "wrong password").status_code == 401
+        assert self.login(app, "nobody@example.test").status_code == 401
+
+    def test_member_login_without_the_flag_is_unchanged(self, app, db):
+        add_user(db, "m@example.test", UserRole.MEMBER)
+        assert self.login(app, "m@example.test", admin_only=False).status_code == 200
+
+    def test_admin_login_shares_the_rate_limit(self, app, db):
+        add_user(db, "m@example.test", UserRole.MEMBER)
+        codes = [self.login(app, "m@example.test", "wrong password").status_code for _ in range(6)]
+        assert codes[-1] == 429
+
+
+class TestLogout:
+    def test_logout_clears_the_cookie_for_a_pending_user(self, app, db):
+        pending = add_user(db, "wait@example.test", UserRole.PENDING)
+        http = client_for(app, pending)
+        assert http.get("/api/auth/me").status_code == 200
+        r = http.post("/api/auth/logout")
+        assert r.status_code == 200 and r.json() == {"status": "signed_out"}
+        assert any(security.SESSION_COOKIE in h and ("Max-Age=0" in h or "expires" in h.lower()) for h in session_cookie_headers(r))
+
+    def test_logout_needs_the_csrf_header(self, bare):
+        assert bare.post("/api/auth/logout").status_code == 403
 
 
 # ─── Audit trail ───────────────────────────────────────────
@@ -1134,7 +1197,7 @@ class TestSchema:
 
     def test_migration_chain(self):
         script = ScriptDirectory(str(Path(app_db_package.__file__).parent / "alembic"))
-        assert script.get_heads() == ["006_users"]
+        assert script.get_heads() == ["009_message_blocked"]
         assert script.get_revision("006_users").down_revision == "005_inquiries"
 
 

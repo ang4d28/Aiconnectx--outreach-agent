@@ -115,6 +115,21 @@ export interface Page<T> {
 
 export type Channel = "linkedin" | "email";
 
+export type InquiryStatus = "new" | "contacted" | "closed";
+
+export interface Inquiry {
+  id: number;
+  name: string;
+  email: string;
+  company: string | null;
+  phone: string | null;
+  interest: string;
+  message: string;
+  status: InquiryStatus;
+  notes: string;
+  created_at: string | null;
+}
+
 export interface DashboardStatus {
   paused: boolean;
   dry_run: boolean;

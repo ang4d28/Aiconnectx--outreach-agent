@@ -419,6 +419,7 @@ async def serve() -> None:
                 f"{settings.send_window_end} {settings.send_window_tz}")
     if removed:
         logger.info(f"Removed stale jobs: {', '.join(removed)}")
+    logger.info(startup_line())
     for line in describe(scheduler):
         logger.info(f"  {line}")
 

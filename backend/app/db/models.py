@@ -67,6 +67,7 @@ class MessageStatus(str, enum.Enum):
     REJECTED = "rejected"
     SENT = "sent"
     FAILED = "failed"
+    BLOCKED = "blocked"  # stopped by the send allowlist (sandbox), never sent
 
 
 class ReviewStatus(str, enum.Enum):
@@ -358,6 +359,8 @@ class Inquiry(Base):
     phone: Mapped[str | None] = mapped_column(String(40))
     interest: Mapped[str] = mapped_column(String(20), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new", server_default="new")
+    notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   FileText,
+  Inbox,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -33,6 +34,7 @@ const NAV: NavItem[] = [
   { to: "/dashboard/drafts", label: "Drafts", short: "Drafts", icon: FileText },
   { to: "/dashboard/replies", label: "Replies", short: "Replies", icon: MessageSquare },
   { to: "/dashboard/attention", label: "Needs attention", short: "Attention", icon: AlertTriangle },
+  { to: "/dashboard/inquiries", label: "Inquiries", short: "Inquiries", icon: Inbox },
   { to: "/dashboard/settings", label: "Settings", short: "Settings", icon: SettingsIcon, adminOnly: true },
   { to: "/dashboard/users", label: "Users", short: "Users", icon: UserCog, adminOnly: true },
 ];
@@ -143,13 +145,23 @@ function usePendingUsers(enabled: boolean) {
   });
 }
 
+function useNewInquiries() {
+  return useQuery({
+    queryKey: ["inquiries", "new-count"],
+    queryFn: async () => (await api.get<{ new: number }>("/inquiries/new-count")).new,
+    refetchInterval: 30_000,
+  });
+}
+
 export default function Layout() {
   const { user, isAdmin, logout } = useAuth();
   const { data: status } = useStatus();
+  const { data: newInquiries = 0 } = useNewInquiries();
   const { data: pendingUsers = 0 } = usePendingUsers(isAdmin);
   const pending = attentionCount(status);
   const nav = NAV.filter((item) => isAdmin || !item.adminOnly);
-  const badgeFor = (to: string): number => (to.endsWith("attention") ? pending : to.endsWith("users") ? pendingUsers : 0);
+  const badgeFor = (to: string): number =>
+    to.endsWith("attention") ? pending : to.endsWith("users") ? pendingUsers : to.endsWith("inquiries") ? newInquiries : 0;
   const onLogout = () => void logout();
 
   return (

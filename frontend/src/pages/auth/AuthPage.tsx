@@ -125,7 +125,7 @@ function Submit({ busy, icon: Icon, children }: { busy: boolean; icon: typeof Lo
   );
 }
 
-function LoginForm({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
+function LoginForm({ onSignedIn, adminOnly = false }: { onSignedIn: (user: AuthUser) => void; adminOnly?: boolean }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -136,7 +136,7 @@ function LoginForm({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
     setBusy(true);
     setError("");
     try {
-      const result = await api.post<{ user: AuthUser }>("/auth/login", { email: email.trim(), password });
+      const result = await api.post<{ user: AuthUser }>("/auth/login", { email: email.trim(), password, ...(adminOnly ? { admin_only: true } : {}) });
       onSignedIn(result.user);
     } catch (err) {
       setError(
@@ -153,7 +153,7 @@ function LoginForm({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
   };
 
   return (
-    <form onSubmit={submit} noValidate aria-label="Sign in" className="mt-5">
+    <form onSubmit={submit} noValidate aria-label={adminOnly ? "Administrator sign in" : "Sign in"} className="mt-5">
       <Field id="login-email" label="Email">
         <input
           id="login-email"
@@ -285,6 +285,8 @@ export default function AuthPage({ mode }: { mode: Mode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null);
+  // The tab only chooses which form to show; the server decides who is an administrator.
+  const [admin, setAdmin] = useState(false);
   const authError = new URLSearchParams(location.search).get("auth_error");
 
   useEffect(() => {
@@ -300,7 +302,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
 
   if (!loading && isActive(user)) return <Navigate to="/dashboard" replace />;
   if (!loading && user) return <Navigate to="/waiting" replace />;
-  if (registeredEmail) return <WaitingApproval registered={{ email: registeredEmail }} />;
+  if (registeredEmail) return <WaitingApproval registered={{ email: registeredEmail }} onLeave={() => setRegisteredEmail(null)} />;
 
   const signedIn = (next: AuthUser) => {
     setUser(next);
@@ -309,48 +311,80 @@ export default function AuthPage({ mode }: { mode: Mode }) {
 
   return (
     <AuthShell wide>
-      <h1 className="mt-8 text-2xl font-bold text-white">{mode === "login" ? "Member sign in" : "Create your account"}</h1>
-      <p className="mt-1 text-sm text-slate-400">
-        {mode === "login" ? "Sign in to the AI ConnectX dashboard." : "Sign up, then wait for an administrator to approve you."}
-      </p>
-
-      {authError && <ErrorBanner>{OAUTH_ERRORS[authError] ?? "Sign-in failed. Please try again."}</ErrorBanner>}
-
-      <div className="mt-5 grid gap-3">
-        <a href="/api/auth/google/login" className="btn-ghost w-full">
-          <GoogleIcon />
-          Continue with Google
-        </a>
-        <a href="/api/auth/microsoft/login" className="btn-ghost w-full">
-          <MicrosoftIcon />
-          Continue with Microsoft
-        </a>
-      </div>
-
-      <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-wider text-slate-500" role="separator">
-        <span className="h-px flex-1 bg-white/10" />
-        or with email
-        <span className="h-px flex-1 bg-white/10" />
-      </div>
-
-      <div role="tablist" aria-label="Sign in or create an account" className="grid grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1">
-        {(["login", "signup"] as const).map((tab) => (
-          <Link
-            key={tab}
-            to={tab === "login" ? "/login" : "/signup"}
+      <div role="tablist" aria-label="Account type" className="mt-8 grid grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+        {([false, true] as const).map((isAdminTab) => (
+          <button
+            key={String(isAdminTab)}
+            type="button"
             role="tab"
-            aria-selected={mode === tab}
-            replace
+            aria-selected={admin === isAdminTab}
+            onClick={() => {
+              setAdmin(isAdminTab);
+              if (isAdminTab && mode === "signup") navigate("/login", { replace: true });
+            }}
             className={`rounded-lg px-3 py-2 text-center text-sm font-semibold transition ${
-              mode === tab ? "bg-white/10 text-white" : "text-slate-400 hover:text-white"
+              admin === isAdminTab ? "bg-white/10 text-white" : "text-slate-400 hover:text-white"
             }`}
           >
-            {tab === "login" ? "Sign in" : "Create account"}
-          </Link>
+            {isAdminTab ? "Admin" : "Member"}
+          </button>
         ))}
       </div>
 
-      {mode === "login" ? <LoginForm onSignedIn={signedIn} /> : <SignupForm onRegistered={setRegisteredEmail} />}
+      <h1 className="mt-6 text-2xl font-bold text-white">
+        {admin ? "Administrator sign in" : mode === "login" ? "Member sign in" : "Create your account"}
+      </h1>
+      <p className="mt-1 text-sm text-slate-400">
+        {admin
+          ? "Email and password only. Only administrator accounts can sign in here."
+          : mode === "login"
+            ? "Sign in to the AI ConnectX dashboard."
+            : "Sign up, then wait for an administrator to approve you."}
+      </p>
+
+      {authError && !admin && <ErrorBanner>{OAUTH_ERRORS[authError] ?? "Sign-in failed. Please try again."}</ErrorBanner>}
+
+      {admin ? (
+        <LoginForm onSignedIn={signedIn} adminOnly />
+      ) : (
+        <>
+          <div className="mt-5 grid gap-3">
+            <a href="/api/auth/google/login" className="btn-ghost w-full">
+              <GoogleIcon />
+              Continue with Google
+            </a>
+            <a href="/api/auth/microsoft/login" className="btn-ghost w-full">
+              <MicrosoftIcon />
+              Continue with Microsoft
+            </a>
+          </div>
+
+          <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-wider text-slate-500" role="separator">
+            <span className="h-px flex-1 bg-white/10" />
+            or with email
+            <span className="h-px flex-1 bg-white/10" />
+          </div>
+
+          <div role="tablist" aria-label="Sign in or create an account" className="grid grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+            {(["login", "signup"] as const).map((tab) => (
+              <Link
+                key={tab}
+                to={tab === "login" ? "/login" : "/signup"}
+                role="tab"
+                aria-selected={mode === tab}
+                replace
+                className={`rounded-lg px-3 py-2 text-center text-sm font-semibold transition ${
+                  mode === tab ? "bg-white/10 text-white" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                {tab === "login" ? "Sign in" : "Create account"}
+              </Link>
+            ))}
+          </div>
+
+          {mode === "login" ? <LoginForm onSignedIn={signedIn} /> : <SignupForm onRegistered={setRegisteredEmail} />}
+        </>
+      )}
     </AuthShell>
   );
 }

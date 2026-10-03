@@ -9,7 +9,7 @@ AI ConnectX Outreach Agent. Automates university placement outreach: finds Linke
 - **100% free tools only.** No paid APIs. No Claude API, no OpenAI API.
 - **LLM layer:** Groq free tier (primary), Gemini free (secondary), Ollama Cloud (fallback: OLLAMA_URL + OLLAMA_API_KEY Bearer auth, POST /api/chat) — all behind one unified interface.
 - **DRY_RUN=true by default** — drafts only, nothing actually sent, until explicitly disabled.
-- **Tech stack:** Python 3.11, FastAPI, SQLAlchemy 2 + Alembic, PostgreSQL, APScheduler, httpx, Playwright, gspread, Gmail API, python-telegram-bot.
+- **Tech stack:** Python 3.11, FastAPI, SQLAlchemy 2 + Alembic, PostgreSQL, APScheduler, httpx, Playwright, gspread, Microsoft Graph (Outlook), WhatsApp Cloud API.
 - **Frontend:** Vite + React + TypeScript + Tailwind CSS + recharts + lucide-react.
 - **Deployment:** Docker Compose. Secrets only in `.env` — never hardcoded.
 
@@ -32,7 +32,7 @@ AI ConnectX Outreach Agent. Automates university placement outreach: finds Linke
 │   │   ├── channels/                        # LinkedIn, Email, Telegram integrations
 │   │   │   ├── __init__.py
 │   │   │   ├── linkedin.py
-│   │   │   ├── email.py                     # Gmail API
+│   │   │   ├── email.py                     # (unused; email is channels/outlook.py, Microsoft Graph)
 │   │   │   └── telegram.py                  # python-telegram-bot
 │   │   ├── llm/                             # Unified LLM interface
 │   │   │   ├── __init__.py

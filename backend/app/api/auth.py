@@ -43,7 +43,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 ATTEMPTS_PER_MINUTE = 5
 INVALID_LOGIN = "Invalid email or password"
-REGISTERED = "Registration received. An administrator has to approve your account before you can sign in."
+NOT_ADMIN = "This account is not an administrator"
+REGISTERED ="Registration received. An administrator has to approve your account before you can sign in."
 
 
 class AuthLimiters:
@@ -133,6 +134,8 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., min_length=1, max_length=MAX_PASSWORD_LENGTH)
+    # Set by the Admin tab. The tab grants nothing: the server checks the role.
+    admin_only: bool = False
 
 
 def find_password_user(db: Session, email: str) -> User | None:
@@ -177,6 +180,10 @@ def login(
     if user is None or not password_ok or user.role == UserRole.DISABLED:
         logger.warning(f"Failed dashboard login from {client_id(request)}")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_LOGIN)
+    # Only after the password checked out, so this cannot be used to find out who is an admin.
+    if data.admin_only and user.role != UserRole.ADMIN:
+        logger.warning(f"Admin login refused for a non-admin account from {client_id(request)}")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, NOT_ADMIN)
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(data.password)
     user.last_login_at = utc_now()

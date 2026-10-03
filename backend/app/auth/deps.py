@@ -52,6 +52,7 @@ MEMBER_ACTIONS: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/attention/{item_id}/dismiss"),
         ("PATCH", "/api/attention/{item_id}"),
         ("POST", "/api/sheet/sync"),
+        ("PATCH", "/api/inquiries/{inquiry_id}"),
     }
 )
 

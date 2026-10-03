@@ -413,7 +413,7 @@ def drafts_statement(view: str) -> Any:
         "awaiting": [Message.status == MessageStatus.DRAFTED],
         "held": [Message.status == MessageStatus.APPROVED],
         "sent": [Message.status == MessageStatus.SENT],
-        "closed": [Message.status.in_((MessageStatus.REJECTED, MessageStatus.FAILED))],
+        "closed": [Message.status.in_((MessageStatus.REJECTED, MessageStatus.FAILED, MessageStatus.BLOCKED))],
         "all": [],
     }[view]
     return stmt.where(*conditions).order_by(Message.id.desc())
@@ -481,7 +481,12 @@ def cancel_draft(
     draft_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_session)
 ) -> dict[str, str]:
     message = get_draft_or_404(db, draft_id)
-    if message.status in (MessageStatus.SENT, MessageStatus.REJECTED, MessageStatus.FAILED):
+    if message.status in (
+        MessageStatus.SENT,
+        MessageStatus.REJECTED,
+        MessageStatus.FAILED,
+        MessageStatus.BLOCKED,
+    ):
         raise HTTPException(status.HTTP_409_CONFLICT, "This message can no longer be cancelled")
     cancel_message(db, message, utc_now(), user.id)
     return {"id": str(draft_id), "result": "cancelled"}

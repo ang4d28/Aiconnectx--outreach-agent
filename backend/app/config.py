@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+import logging
 import os
 from functools import cached_property
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 
 # The test suite sets CONNECTX_IGNORE_ENV_FILE so a developer's real .env is never read.
 ENV_FILE: str | None = None if os.environ.get("CONNECTX_IGNORE_ENV_FILE") else str(_ROOT / ".env")
+
+
+def resolve_path(value: str, *, is_dir: bool = False) -> str:
+    """Resolve a path setting against the project root unless it is absolute, and create its folder.
+
+    A leading "/" counts as absolute on every OS, so the Docker defaults (/app/...) are kept as written.
+    A folder that cannot be created (for example /app on a dev machine) is left for the first use to report.
+    """
+    if not value:
+        return value
+    path = Path(value)
+    if not (path.is_absolute() or value.startswith(("/", "\\"))):
+        path = _ROOT / path
+    try:
+        (path if is_dir else path.parent).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logging.getLogger(__name__).warning(f"Could not create folder for {path}: {exc}")
+    return str(path)
 
 
 class Settings(BaseSettings):
@@ -42,11 +62,11 @@ class Settings(BaseSettings):
     linkedin_profile_dir: str = "/app/secrets/linkedin-profile"
     linkedin_headless: bool = True
 
-    # Gmail / Email
-    gmail_client_id: str = ""
-    gmail_client_secret: str = ""
-    gmail_refresh_token: str = ""
-    gmail_sender_email: str = ""
+    # Outlook (Microsoft Graph) is the only email channel
+    ms_token_cache_path: str = "/app/creds/ms_token_cache.json"
+
+    # Sandbox: comma-separated email addresses. When set, email goes only to these (blocked by sandbox otherwise).
+    send_allowlist: str = ""
 
     # WhatsApp (owner notifications and message review)
     whatsapp_phone_number_id: str = ""
@@ -100,6 +120,16 @@ class Settings(BaseSettings):
     # gspread
     google_service_account_file: str = "/app/creds/gspread-service-account.json"
     google_sheet_id: str = ""
+
+    @field_validator("linkedin_profile_dir")
+    @classmethod
+    def _profile_dir(cls, value: str) -> str:
+        return resolve_path(value, is_dir=True)
+
+    @field_validator("ms_token_cache_path", "google_service_account_file")
+    @classmethod
+    def _file_path(cls, value: str) -> str:
+        return resolve_path(value)
 
     @cached_property
     def database_url(self) -> str:

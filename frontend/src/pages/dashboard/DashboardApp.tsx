@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAdmin, RequireAuth, useAuth } from "../auth/auth";
 import Attention from "./Attention";
 import Drafts from "./Drafts";
+import Inquiries from "./Inquiries";
 import Layout from "./Layout";
 import Leads from "./Leads";
 import Overview from "./Overview";
@@ -54,6 +55,7 @@ export default function DashboardApp() {
             <Route path="drafts" element={<Drafts />} />
             <Route path="replies" element={<Replies />} />
             <Route path="attention" element={<Attention />} />
+            <Route path="inquiries" element={<Inquiries />} />
             <Route element={<RequireAdmin />}>
               <Route path="settings" element={<Settings />} />
               <Route path="users" element={<Users />} />

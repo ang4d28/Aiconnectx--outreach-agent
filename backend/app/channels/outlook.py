@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import httpx
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.channels.base import IncomingReply, Thread
-from app.config import ENV_FILE
+from app.config import ENV_FILE, resolve_path
+from app.sandbox import check_email
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,11 @@ class OutlookSettings(BaseSettings):
     ms_client_id: str = ""
     ms_tenant: str = "common"
     ms_token_cache_path: str = "/app/creds/ms_token_cache.json"
+
+    @field_validator("ms_token_cache_path")
+    @classmethod
+    def _cache_path(cls, value: str) -> str:
+        return resolve_path(value)
 
 
 class OutlookAuthError(Exception):
@@ -207,6 +214,7 @@ class OutlookClient:
     async def send_email(
         self, to: str, subject: str, body: str, conversation_id: str | None = None
     ) -> str | None:
+        check_email(to)
         if conversation_id:
             latest = await self._latest_in_conversation(conversation_id)
             if latest:
@@ -261,6 +269,7 @@ class OutlookClient:
         return [to_incoming(r) for r in await self.list_new_replies(since)]
 
     async def reply(self, thread: Thread, text: str) -> str | None:
+        check_email(thread.recipient)
         if thread.thread_id:
             latest = await self._latest_in_conversation(thread.thread_id)
             if latest:

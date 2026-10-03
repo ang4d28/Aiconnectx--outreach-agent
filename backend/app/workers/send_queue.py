@@ -25,6 +25,7 @@ from app.db.models import (
     ReviewStatus,
 )
 from app.db.schemas import SettingCreate, SettingUpdate
+from app.sandbox import SandboxBlocked, check_email
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,10 @@ class SendQueue:
         message.status = MessageStatus.REJECTED
         self.db.commit()
 
+    def _sandbox_block(self, message: Message) -> None:
+        message.status = MessageStatus.BLOCKED
+        self.db.commit()
+
     def _mark_failed(self, message: Message) -> None:
         message.status = MessageStatus.FAILED
         self.db.commit()
@@ -504,6 +509,9 @@ class SendQueue:
         except NotImplementedError:
             logger.info(f"Channel not available yet for message {message.id}; left queued")
             return "skipped"
+        except SandboxBlocked:
+            self._sandbox_block(message)  # already logged "blocked by sandbox"
+            return "blocked"
         except LinkedInBlocked:
             # Channel disabled, global pause set, owner alerted: stop the run, keep the message.
             return "paused"
@@ -531,6 +539,12 @@ class SendQueue:
         if self._is_blocked(outreach, contact, channel, dnc):
             self._reject(message)
             return "blocked"
+        if channel == ChannelType.EMAIL:
+            try:
+                check_email(contact.email or "")
+            except SandboxBlocked:
+                self._sandbox_block(message)
+                return "blocked"
         if (
             channel == ChannelType.LINKEDIN
             and outreach.state == OutreachState.DRAFTED

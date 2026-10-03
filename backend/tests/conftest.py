@@ -82,11 +82,8 @@ TEST_ENV: dict[str, str] = {
     # Google
     "GOOGLE_SERVICE_ACCOUNT_FILE": os.path.join(_TMP, "service-account.json"),
     "GOOGLE_SHEET_ID": "test-sheet-id",
-    # Legacy keys that may exist in a developer's shell
-    "GMAIL_CLIENT_ID": "",
-    "GMAIL_CLIENT_SECRET": "",
-    "GMAIL_REFRESH_TOKEN": "",
-    "GMAIL_SENDER_EMAIL": "",
+    # Sandbox off unless a test turns it on
+    "SEND_ALLOWLIST": "",
 }
 os.environ.update(TEST_ENV)  # overwrite, never setdefault: nothing real may leak in
 

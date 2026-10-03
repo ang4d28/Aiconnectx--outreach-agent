@@ -53,6 +53,17 @@ def not_self(admin: User, target: User, action: str) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"You cannot {action} your own account")
 
 
+def keep_one_admin(db: Session, target: User, action: str) -> None:
+    """Refuse to demote or disable the last remaining admin."""
+    if target.role != UserRole.ADMIN:
+        return
+    others = db.scalar(
+        select(func.count()).select_from(User).where(User.role == UserRole.ADMIN, User.id != target.id)
+    )
+    if not others:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"You cannot {action} the last remaining administrator")
+
+
 @router.get("")
 def list_users(
     role: UserRole | None = None,
@@ -92,6 +103,8 @@ def change_role(
 ) -> UserRead:
     user = get_user_or_404(db, user_id)
     not_self(admin, user, "change the role of")
+    if data.role != "admin":
+        keep_one_admin(db, user, "demote")
     user.role = UserRole(data.role)
     db.commit()
     logger.warning(f"Admin {admin.id} set user {user.id} to {user.role.value}")
@@ -106,6 +119,7 @@ def disable(
 ) -> UserRead:
     user = get_user_or_404(db, user_id)
     not_self(admin, user, "disable")
+    keep_one_admin(db, user, "disable")
     user.role = UserRole.DISABLED
     db.commit()
     logger.warning(f"Admin {admin.id} disabled user {user.id}")

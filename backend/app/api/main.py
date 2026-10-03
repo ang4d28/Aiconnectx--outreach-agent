@@ -14,6 +14,7 @@ from app.api.routes.outreach import router as outreach_router
 from app.api.routes.persons import router as persons_router
 from app.api.export import router as export_router
 from app.api.inquiries import router as inquiries_router
+from app.api.inquiries_admin import router as inquiries_admin_router
 from app.api.reports import router as reports_router
 from app.api.routes.tracking import router as tracking_router
 from app.api.whatsapp_webhook import router as whatsapp_router
@@ -34,6 +35,7 @@ for router in (
     dashboard_router,
     drafts_router,
     export_router,
+    inquiries_admin_router,
     control_router,
     outreach_router,
     persons_router,
