@@ -8,11 +8,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
 import yaml
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.db import SessionLocal, repository
 from app.db.models import PostStatus
 from app.db.schemas import CompanyCreate, PostCreate
@@ -38,8 +36,8 @@ QUERIES_FILE = Path(__file__).parent.parent.parent / "search_queries.yaml"
 class PostMonitor:
     def __init__(self, db: Session | None = None):
         self.db = db or SessionLocal()
-        self.searxng_url = settings.searxng_url
-        self.timeout = 30.0
+        self.max_attempts = 3
+        self.retry_base_delay = 5.0
         self.max_age_hours = 48
 
     async def run_once(self) -> dict[str, Any]:
@@ -101,65 +99,35 @@ class PostMonitor:
         return summary
 
     async def _search(self, query: str) -> list[dict[str, Any]]:
-        """Search using SearXNG with DuckDuckGo fallback."""
-        try:
-            if self.searxng_url:
-                results = await self._search_searxng(query)
-                if results:
-                    return results
-                logger.warning("SearXNG returned no results, trying DuckDuckGo")
-        except Exception as e:
-            logger.warning(f"SearXNG failed: {e}, falling back to DuckDuckGo")
-        
-        return await self._search_duckduckgo(query)
-
-    async def _search_searxng(self, query: str) -> list[dict[str, Any]]:
-        """Search via SearXNG instance."""
-        url = f"{self.searxng_url}/search"
-        params = {
-            "q": query,
-            "format": "json",
-            "time_range": "day",  # last 24h
-            "categories": "general",
-        }
-        
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            results = []
-            for item in data.get("results", []):
-                results.append({
-                    "url": item.get("url", ""),
-                    "title": item.get("title", ""),
-                    "content": item.get("content", ""),
-                    "published": item.get("publishedDate"),
-                })
-            
-            return results
-
-    async def _search_duckduckgo(self, query: str) -> list[dict[str, Any]]:
-        """Search via DuckDuckGo library."""
+        """Search DuckDuckGo, retrying with backoff on failure; skip the query once retries run out."""
         if DDGS is None:
             logger.error("duckduckgo-search library not installed")
             return []
-        
-        results = []
-        try:
-            with DDGS() as ddgs:
-                search_results = ddgs.text(query, max_results=20)
-                for item in search_results:
-                    results.append({
-                        "url": item.get("href", ""),
-                        "title": item.get("title", ""),
-                        "content": item.get("body", ""),
-                        "published": None,  # DuckDuckGo doesn't provide dates
-                    })
-        except Exception as e:
-            logger.error(f"DuckDuckGo search failed: {e}")
-        
-        return results
+
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return await asyncio.to_thread(self._ddg_text, query)
+            except Exception as e:
+                if attempt == self.max_attempts:
+                    logger.error(f"DuckDuckGo search failed for '{query}' after {attempt} attempts, skipping: {e}")
+                    return []
+                delay = self.retry_base_delay * 2 ** (attempt - 1)
+                logger.warning(f"DuckDuckGo search failed (attempt {attempt}/{self.max_attempts}): {e}; retrying in {delay:.0f}s")
+                await asyncio.sleep(delay)
+        return []
+
+    def _ddg_text(self, query: str) -> list[dict[str, Any]]:
+        with DDGS() as ddgs:
+            items = ddgs.text(query, max_results=20)
+            return [
+                {
+                    "url": item.get("href", ""),
+                    "title": item.get("title", ""),
+                    "content": item.get("body", ""),
+                    "published": None,  # DuckDuckGo doesn't provide dates
+                }
+                for item in items
+            ]
 
     def _dedupe_by_url(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Remove duplicate URLs."""

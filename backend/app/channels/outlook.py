@@ -37,7 +37,7 @@ class OutlookSettings(BaseSettings):
 
     ms_client_id: str = ""
     ms_tenant: str = "common"
-    ms_token_cache_path: str = "/app/creds/ms_token_cache.json"
+    ms_token_cache_path: str = "secrets/ms_token.json"
 
     @field_validator("ms_token_cache_path")
     @classmethod

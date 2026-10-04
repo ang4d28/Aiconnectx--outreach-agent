@@ -1,0 +1,24 @@
+# Installed as /etc/caddy/Caddyfile. DOMAIN comes from /etc/caddy/caddy.env (written by install.sh).
+# Caddy gets and renews the HTTPS certificate for it automatically (ports 80 and 443 must be reachable).
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		root * /var/www/aiconnectx
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

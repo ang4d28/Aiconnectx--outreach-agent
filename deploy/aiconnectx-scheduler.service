@@ -1,0 +1,19 @@
+[Unit]
+Description=AI ConnectX scheduler (APScheduler jobs, LinkedIn browser)
+After=network-online.target postgresql.service aiconnectx-backend.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__/backend
+EnvironmentFile=__APP_DIR__/.env
+ExecStart=__APP_DIR__/backend/.venv/bin/python -m app.scheduler
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -17,27 +17,6 @@ def mock_db():
 
 
 @pytest.fixture
-def mock_searxng_response():
-    """Mock SearXNG search response."""
-    return {
-        "results": [
-            {
-                "url": "https://linkedin.com/posts/test-1",
-                "title": "Hiring AI Engineers",
-                "content": "We're hiring AI engineers for our team",
-                "publishedDate": datetime.utcnow().isoformat(),
-            },
-            {
-                "url": "https://linkedin.com/posts/test-2",
-                "title": "ML Internship",
-                "content": "Internship opportunity in machine learning",
-                "publishedDate": datetime.utcnow().isoformat(),
-            },
-        ]
-    }
-
-
-@pytest.fixture
 def mock_ddg_response():
     """Mock DuckDuckGo search response."""
     return [
@@ -74,44 +53,52 @@ class TestPostMonitor:
     """Test PostMonitor functionality."""
 
     @pytest.mark.asyncio
-    async def test_search_searxng_success(self, mock_db, mock_searxng_response):
-        """Test successful SearXNG search."""
+    async def test_search_duckduckgo(self, mock_db, mock_ddg_response):
+        """Test results are mapped from the DuckDuckGo library."""
         monitor = PostMonitor(db=mock_db)
-        
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = mock_searxng_response
-            mock_response.raise_for_status.return_value = None
-            mock_client.get.return_value = mock_response
-            
-            with patch("app.workers.post_monitor.settings") as mock_settings:
-                mock_settings.searxng_url = "http://searxng:8080"
-                
-                results = await monitor._search_searxng("test query")
-                
-                assert len(results) == 2
-                assert results[0]["url"] == "https://linkedin.com/posts/test-1"
-                assert results[1]["title"] == "ML Internship"
 
-    @pytest.mark.asyncio
-    async def test_search_duckduckgo_fallback(self, mock_db, mock_ddg_response):
-        """Test DuckDuckGo fallback when SearXNG fails."""
-        monitor = PostMonitor(db=mock_db)
-        
         with patch("app.workers.post_monitor.DDGS") as mock_ddgs_class:
             mock_ddgs = MagicMock()
             mock_ddgs_class.return_value.__enter__.return_value = mock_ddgs
             mock_ddgs.text.return_value = mock_ddg_response
-            
-            results = await monitor._search_duckduckgo("test query")
-            
+
+            results = await monitor._search("test query")
+
             assert len(results) == 2
             assert results[0]["url"] == "https://linkedin.com/posts/ddg-1"
             assert results[1]["title"] == "Campus Recruitment"
+
+    @pytest.mark.asyncio
+    async def test_search_retries_rate_limit_then_succeeds(self, mock_db, mock_ddg_response):
+        """A rate-limited call is retried with backoff and the next attempt's results are used."""
+        monitor = PostMonitor(db=mock_db)
+        monitor.retry_base_delay = 0
+
+        with patch("app.workers.post_monitor.DDGS") as mock_ddgs_class:
+            mock_ddgs = MagicMock()
+            mock_ddgs_class.return_value.__enter__.return_value = mock_ddgs
+            mock_ddgs.text.side_effect = [Exception("202 Ratelimit"), mock_ddg_response]
+
+            results = await monitor._search("test query")
+
+            assert len(results) == 2
+            assert mock_ddgs.text.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_search_skips_query_after_retries_exhausted(self, mock_db):
+        """When every attempt fails the query is skipped (no results, no exception)."""
+        monitor = PostMonitor(db=mock_db)
+        monitor.retry_base_delay = 0
+
+        with patch("app.workers.post_monitor.DDGS") as mock_ddgs_class:
+            mock_ddgs = MagicMock()
+            mock_ddgs_class.return_value.__enter__.return_value = mock_ddgs
+            mock_ddgs.text.side_effect = Exception("202 Ratelimit")
+
+            results = await monitor._search("test query")
+
+            assert results == []
+            assert mock_ddgs.text.call_count == monitor.max_attempts
 
     def test_dedupe_by_url(self, mock_db):
         """Test URL deduplication."""
@@ -247,38 +234,30 @@ class TestPostMonitor:
             assert post_data is None
 
     @pytest.mark.asyncio
-    async def test_run_once_full_cycle(self, mock_db, mock_searxng_response, mock_extraction):
+    async def test_run_once_full_cycle(self, mock_db, mock_ddg_response, mock_extraction):
         """Test full run_once cycle."""
         monitor = PostMonitor(db=mock_db)
-        
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = mock_searxng_response
-            mock_response.raise_for_status.return_value = None
-            mock_client.get.return_value = mock_response
-            
+
+        with patch("app.workers.post_monitor.DDGS") as mock_ddgs_class:
+            mock_ddgs = MagicMock()
+            mock_ddgs_class.return_value.__enter__.return_value = mock_ddgs
+            mock_ddgs.text.return_value = mock_ddg_response
+
             with patch("app.workers.post_monitor.llm_client") as mock_llm:
                 mock_llm.complete_json = AsyncMock(return_value=mock_extraction)
-                
+
                 with patch("app.workers.post_monitor.repository") as mock_repo:
                     mock_repo.get_post_by_url.return_value = None  # No duplicates
                     mock_repo.create_post.return_value = MagicMock()
-                    
-                    with patch("app.workers.post_monitor.settings") as mock_settings:
-                        mock_settings.searxng_url = "http://searxng:8080"
-                        
-                        with patch.object(monitor, "_load_queries") as mock_load:
-                            mock_load.return_value = ["test query"]
-                            
-                            result = await monitor.run_once()
-                            
-                            assert result["total_results"] == 2
-                            assert result["saved"] >= 0
-                            assert "processed" in result
+
+                    with patch.object(monitor, "_load_queries") as mock_load:
+                        mock_load.return_value = ["test query"]
+
+                        result = await monitor.run_once()
+
+                        assert result["total_results"] == 2
+                        assert result["saved"] >= 0
+                        assert "processed" in result
 
     def test_load_queries_default(self, mock_db):
         """Test loading default queries when file doesn't exist."""

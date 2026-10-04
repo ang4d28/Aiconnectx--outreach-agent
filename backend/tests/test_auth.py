@@ -93,6 +93,20 @@ def bare(app):
     return TestClient(app, follow_redirects=False)
 
 
+def iter_routes(router, prefix="", dependencies=()):
+    """Yield (route, full path, dependencies) for every API route, also through nested includes.
+
+    Newer FastAPI keeps included routers as separate objects whose prefix and dependencies live in
+    their include context instead of on each route.
+    """
+    for route in router.routes:
+        context = getattr(route, "include_context", None)
+        if context is not None:
+            yield from iter_routes(route.original_router, prefix + context.prefix, dependencies + tuple(context.dependencies))
+        elif isinstance(route, APIRoute):
+            yield route, prefix + route.path, dependencies + tuple(route.dependencies)
+
+
 def add_user(
     db,
     email="member@example.test",
@@ -507,17 +521,17 @@ class TestRoles:
 
     def test_every_protected_route_has_the_permission_dependency(self):
         public = ("/api/auth", "/api/inquiries", "/api/whatsapp", "/api/health")
+        routes = list(iter_routes(api_router))
+        assert len(routes) > 20  # the walk must see the real routes, not just /api/health
         unguarded = [
-            f"{sorted(route.methods)} {route.path}"
-            for route in api_router.routes
-            if isinstance(route, APIRoute)
-            and not route.path.startswith(public)
-            and not any(dep.dependency is deps.authorize for dep in route.dependencies)
+            f"{sorted(route.methods)} {path}"
+            for route, path, dependencies in routes
+            if not path.startswith(public) and not any(dep.dependency is deps.authorize for dep in dependencies)
         ]
         assert unguarded == []
 
     def test_member_action_table_matches_real_routes(self):
-        real = {(m, r.path) for r in api_router.routes if isinstance(r, APIRoute) for m in r.methods}
+        real = {(m, path) for route, path, _ in iter_routes(api_router) for m in route.methods}
         assert deps.MEMBER_ACTIONS <= real  # a renamed route must not silently become admin-only
 
     @pytest.mark.parametrize(

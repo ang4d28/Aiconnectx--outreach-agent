@@ -1,5 +1,5 @@
 # Search queries for LinkedIn post monitoring
-# Each query will be executed against SearXNG (with DuckDuckGo fallback)
+# Each query is run against DuckDuckGo (duckduckgo-search library)
 
 queries:
   - 'site:linkedin.com/posts ("hiring" OR "campus hiring" OR "internship" OR "freshers") AI ML'

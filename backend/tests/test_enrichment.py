@@ -55,41 +55,23 @@ class TestEnrichmentWorker:
             mock_llm.complete_json.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_find_linkedin_profile_searxng(self, mock_db):
-        """Test LinkedIn profile search via SearXNG."""
+    async def test_find_linkedin_profile_duckduckgo(self, mock_db):
+        """Test LinkedIn profile search via DuckDuckGo."""
         worker = EnrichmentWorker(db=mock_db)
-        
-        mock_search_results = {
-            "results": [
-                {
-                    "url": "https://linkedin.com/in/john-doe-hr",
-                    "title": "John Doe - HR Manager at TechCorp",
-                },
-                {
-                    "url": "https://techcorp.com/team",
-                    "title": "Team page",
-                },
-            ]
-        }
-        
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = mock_search_results
-            mock_response.raise_for_status.return_value = None
-            mock_client.get.return_value = mock_response
-            
-            with patch("app.workers.enrichment.settings") as mock_settings:
-                mock_settings.searxng_url = "http://searxng:8080"
-                
-                linkedin_url = await worker._find_linkedin_profile(
-                    "TechCorp", ContactRole.HR
-                )
-                
-                assert linkedin_url == "https://linkedin.com/in/john-doe-hr"
+
+        mock_search_results = [
+            {"href": "https://linkedin.com/in/john-doe-hr", "title": "John Doe - HR Manager at TechCorp"},
+            {"href": "https://techcorp.com/team", "title": "Team page"},
+        ]
+
+        with patch("duckduckgo_search.DDGS") as mock_ddgs_class:
+            mock_ddgs = MagicMock()
+            mock_ddgs_class.return_value.__enter__.return_value = mock_ddgs
+            mock_ddgs.text.return_value = mock_search_results
+
+            linkedin_url = await worker._find_linkedin_profile("TechCorp", ContactRole.HR)
+
+            assert linkedin_url == "https://linkedin.com/in/john-doe-hr"
 
     @pytest.mark.asyncio
     async def test_scrape_company_emails(self, mock_db):

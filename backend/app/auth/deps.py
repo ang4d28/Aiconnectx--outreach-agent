@@ -77,8 +77,26 @@ def get_current_user(request: Request, db: Session = Depends(get_session)) -> Us
     return user
 
 
+def route_template(request: Request) -> str:
+    """The matched route's full path template, e.g. /api/attention/{item_id}/dismiss.
+
+    Newer FastAPI versions report the route path without the prefix of the router it was included
+    through, so the leading part is taken from the request path and the route's own segments after it.
+    """
+    path = request.url.path
+    route_path = getattr(request.scope.get("route"), "path", None)
+    if not route_path:
+        return path
+    request_segments = path.strip("/").split("/")
+    route_segments = route_path.strip("/").split("/")
+    if len(request_segments) < len(route_segments) or ":path}" in route_path:
+        return route_path
+    prefix = request_segments[: len(request_segments) - len(route_segments)]
+    return "/" + "/".join(prefix + route_segments)
+
+
 def required_role(request: Request) -> UserRole:
-    route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    route_path = route_template(request)
     if route_path.startswith(ADMIN_ONLY_PREFIXES):
         return UserRole.ADMIN
     if request.method in SAFE_METHODS:

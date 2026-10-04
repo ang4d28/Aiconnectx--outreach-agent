@@ -17,13 +17,12 @@ ENV_FILE: str | None = None if os.environ.get("CONNECTX_IGNORE_ENV_FILE") else s
 def resolve_path(value: str, *, is_dir: bool = False) -> str:
     """Resolve a path setting against the project root unless it is absolute, and create its folder.
 
-    A leading "/" counts as absolute on every OS, so the Docker defaults (/app/...) are kept as written.
-    A folder that cannot be created (for example /app on a dev machine) is left for the first use to report.
+    A folder that cannot be created is left for the first use to report.
     """
     if not value:
         return value
     path = Path(value)
-    if not (path.is_absolute() or value.startswith(("/", "\\"))):
+    if not path.is_absolute():
         path = _ROOT / path
     try:
         (path if is_dir else path.parent).mkdir(parents=True, exist_ok=True)
@@ -59,11 +58,11 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2"
 
     # LinkedIn (persistent Playwright profile; manual first login, no password stored)
-    linkedin_profile_dir: str = "/app/secrets/linkedin-profile"
+    linkedin_profile_dir: str = "secrets/linkedin-profile"
     linkedin_headless: bool = True
 
     # Outlook (Microsoft Graph) is the only email channel
-    ms_token_cache_path: str = "/app/creds/ms_token_cache.json"
+    ms_token_cache_path: str = "secrets/ms_token.json"
 
     # Sandbox: comma-separated email addresses. When set, email goes only to these (blocked by sandbox otherwise).
     send_allowlist: str = ""
@@ -94,17 +93,11 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
 
     # Database
-    postgres_host: str = "postgres"
+    postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "connectx"
     postgres_user: str = "connectx"
     postgres_password: str = ""
-
-    # Redis (APScheduler backing)
-    redis_url: str = "redis://redis:6379/0"
-
-    # Search
-    searxng_url: str = "http://searxng:8080"
 
     # Guardrails
     linkedin_daily_cap: int = 20
@@ -116,7 +109,7 @@ class Settings(BaseSettings):
     daily_cap_reset_hour: int = 0
 
     # gspread
-    google_service_account_file: str = "/app/creds/gspread-service-account.json"
+    google_service_account_file: str = "secrets/gspread-service-account.json"
     google_sheet_id: str = ""
 
     @field_validator("linkedin_profile_dir")

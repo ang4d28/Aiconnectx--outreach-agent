@@ -26,7 +26,6 @@ class EnrichmentWorker:
     def __init__(self, db: Session | None = None):
         self.db = db or SessionLocal()
         self.timeout = 30.0
-        self.searxng_url = settings.searxng_url
 
     async def enrich_company(self, company: Company) -> dict[str, Any]:
         """Enrich company information."""
@@ -120,10 +119,7 @@ class EnrichmentWorker:
         query = f'site:linkedin.com/in "{role_keywords}" "{company_name}"'
         
         try:
-            if self.searxng_url:
-                results = await self._search_linkedin_searxng(query)
-            else:
-                results = await self._search_linkedin_duckduckgo(query)
+            results = await self._search_linkedin_duckduckgo(query)
             
             # Return first LinkedIn profile URL
             for result in results:
@@ -136,25 +132,6 @@ class EnrichmentWorker:
         except Exception as e:
             logger.error(f"LinkedIn search failed: {e}")
             return None
-
-    async def _search_linkedin_searxng(self, query: str) -> list[dict[str, Any]]:
-        """Search LinkedIn profiles via SearXNG."""
-        url = f"{self.searxng_url}/search"
-        params = {
-            "q": query,
-            "format": "json",
-            "categories": "general",
-        }
-        
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            return [
-                {"url": item.get("url", ""), "title": item.get("title", "")}
-                for item in data.get("results", [])[:5]
-            ]
 
     async def _search_linkedin_duckduckgo(self, query: str) -> list[dict[str, Any]]:
         """Search LinkedIn profiles via DuckDuckGo."""

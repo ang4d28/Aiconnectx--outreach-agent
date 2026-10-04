@@ -1,7 +1,6 @@
 """Seed three fake hiring posts so the whole pipeline can be exercised in DRY_RUN.
 
     python scripts/seed_demo.py            # seeds the configured database
-    docker compose exec backend python /app/scripts/seed_demo.py   (copy the script in first)
 
 The posts cover the three targeting paths:
   recruiter      the poster is a recruiter, so the poster is the contact

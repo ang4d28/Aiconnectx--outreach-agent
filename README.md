@@ -6,7 +6,7 @@ Automated placement outreach for AI ConnectX. It finds LinkedIn hiring posts, pi
 
 ## What runs and when
 
-One `scheduler` container runs every job (APScheduler, job store in Postgres, times in IST):
+One scheduler process (`python -m app.scheduler`) runs every job (APScheduler, job store in Postgres, times in IST):
 
 | Job | Schedule | What it does |
 |---|---|---|
@@ -24,171 +24,176 @@ Drafts appear after the 08:00 run. You approve them on the dashboard; each appro
 
 If a job fails, you get a dashboard "Needs attention" item and a WhatsApp alert. After 3 failures in a row the failing channel is disabled (see [Operations](#operations)).
 
-## Services
+## Processes
 
-| Service | Purpose |
-|---|---|
-| `postgres` | database and scheduler job store |
-| `searxng` | search engine for post discovery |
-| `backend` | API and WhatsApp webhook; applies migrations on start |
-| `scheduler` | all scheduled jobs, including the LinkedIn browser |
-| `frontend` | landing page and operator dashboard (nginx, profile `frontend`). Port 80 is the public landing page and proxies only `POST /api/inquiries`; port 8081 is the private dashboard |
-| `cloudflared` | Cloudflare Tunnel for the webhook (profile `tunnel`) |
+| Process | Command | Purpose |
+|---|---|---|
+| PostgreSQL | local install, `localhost:5432` | database and scheduler job store |
+| API | `uvicorn app.main:app --port 8000` | REST API and WhatsApp webhook |
+| Scheduler | `python -m app.scheduler` | all scheduled jobs, including the LinkedIn browser |
+| Frontend | `npm run dev` (Vite, port 5173) | landing page and operator dashboard |
 
-Everything is bound to `127.0.0.1`. Nothing is exposed to the internet except what you publish through the tunnel.
+## Prerequisites
 
-## Run locally
+- Python 3.11+
+- Node 20+ and npm
+- PostgreSQL 15+ running on `localhost:5432`
+- Git
 
-```bash
-cp .env.example .env        # fill in POSTGRES_PASSWORD at least
-mkdir -p secrets creds
-docker compose build
-docker compose up -d
-docker compose logs -f scheduler
+## Set up on Windows
+
+1. **PostgreSQL.** Install it from https://www.postgresql.org/download/windows/, remember the `postgres` password, then create the database:
+
+   ```powershell
+   psql -U postgres -c "CREATE DATABASE aiconnectx;"
+   ```
+
+2. **Configure.**
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   Edit `.env`. At least: `POSTGRES_PASSWORD`, `JWT_SECRET` (32+ random characters), one LLM key (`GROQ_API_KEY`), `WHATSAPP_*`, `MS_CLIENT_ID` / `MS_TENANT` / `OUTLOOK_SENDER_ADDRESS`, `TPO_NAME` / `TPO_PHONE` / `TPO_EMAIL`, and optionally `GOOGLE_SHEET_ID`. Keep `DRY_RUN=true`. File paths in `.env` (`secrets/...`) are relative to the project root and their folders are created automatically. Put the Google service-account JSON at `secrets/gspread-service-account.json` and share the sheet with that account as an editor.
+
+3. **Python environment and migrations.**
+
+   ```powershell
+   cd backend
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e ".[dev]"
+   playwright install chromium
+   alembic -c app/db/alembic.ini upgrade head
+   python -m app.cli create-admin --email you@example.com    # prompts for a password
+   cd ..
+   ```
+
+4. **Frontend.**
+
+   ```powershell
+   cd frontend
+   npm install
+   cd ..
+   ```
+
+5. **Run everything.** This opens three windows: the API on port 8000, the scheduler, and the Vite dev server.
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
+   ```
+
+   - Dashboard: http://localhost:5173/dashboard (sign in with the admin account)
+   - API docs: http://localhost:8000/docs
+   - The scheduler window should show `Scheduler started in DRY_RUN (nothing is sent)` followed by the job list. To print the schedule without a database: `cd backend; python -m app.scheduler --check`.
+
+Tests: `cd backend; pytest -q`. Frontend build check: `cd frontend; npm run build`.
+
+On Linux use `scripts/dev.sh` instead of `dev.ps1` (create the venv with `python3 -m venv .venv`).
+
+## One-time logins
+
+**Outlook (device-code login).** Run once from `backend` with the venv active; open the printed URL, enter the code and sign in as the sender mailbox:
+
+```powershell
+python -c "import logging; logging.basicConfig(level=logging.WARNING); from app.channels.outlook import get_client; get_client().tokens.get_token(); print('Outlook token saved')"
 ```
 
-You should see `Scheduler started in DRY_RUN (nothing is sent)` followed by the job list. To print the schedule without Docker or a database: `cd backend && python -m app.scheduler --check`.
+The token cache is stored in `secrets/ms_token.json`.
 
-Tests: `docker compose run --rm backend pytest -q`
+**LinkedIn.** The first login is manual in a visible browser and no password is stored:
 
-## Deploy on Oracle Cloud Always Free
-
-### 1. Create the VM
-
-1. Create an Oracle Cloud account and pick a home region (it cannot be changed later).
-2. Compute > Instances > Create instance:
-   - Image: **Ubuntu 22.04** (aarch64 for Ampere).
-   - Shape: **VM.Standard.A1.Flex** with **2 OCPU and 12 GB** RAM (Always Free allows up to 4 OCPU / 24 GB). Do not use the 1 GB AMD micro shape: Chromium and Postgres will not fit.
-   - Boot volume: 50-100 GB.
-   - Add your SSH public key.
-3. Networking: keep only inbound **SSH (22)** open in the subnet's security list. You do not need ports 80/443 or 8000; the Cloudflare Tunnel connects outbound.
-
-Always Free capacity for A1 is sometimes full in a region; retry later or try another availability domain.
-
-### 2. Install Docker
-
-```bash
-ssh ubuntu@<vm-ip>
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER && newgrp docker
-docker compose version
+```powershell
+cd backend
+python -m app.channels.linkedin login
 ```
 
-### 3. Get the code and configure
+The profile is saved in `secrets/linkedin-profile`. A Chromium profile is tied to the OS that created it: a profile made on Windows will not work on the Ubuntu server, so log in again there (a desktop session or a forwarded display is needed). Logging in from a new IP can trigger a LinkedIn security check; if it does, the channel disables itself and alerts you (see Operations). Automating LinkedIn is against its terms of service: keep the caps low.
 
-```bash
-git clone https://github.com/ang4d28/Aiconnectx--outreach-agent.git aiconnectx
-cd aiconnectx
-cp .env.example .env
-mkdir -p secrets creds
-nano .env
-```
-
-Fill in at least: `POSTGRES_PASSWORD`, one LLM key (`GROQ_API_KEY`), `WHATSAPP_*` (see step 6), `MS_CLIENT_ID` / `MS_TENANT` / `OUTLOOK_SENDER_ADDRESS`, `TPO_NAME` / `TPO_PHONE` / `TPO_EMAIL`, and (optional) `GOOGLE_SHEET_ID`. Keep `DRY_RUN=true` for now. Put the Google service-account JSON in `creds/gspread-service-account.json` and share the sheet with that account's email as an editor.
-
-### 4. Start
-
-```bash
-docker compose build        # first build takes a few minutes (Chromium)
-docker compose up -d
-docker compose ps           # all services running, backend and postgres healthy
-docker compose logs -f scheduler
-```
-
-Database migrations run automatically when the backend starts.
-
-### 5. One-time logins
-
-**Outlook (device-code login).** Run once; open the printed URL, enter the code and sign in as the sender mailbox:
-
-```bash
-docker compose exec backend python -c "import logging; logging.basicConfig(level=logging.WARNING); from app.channels.outlook import get_client; get_client().tokens.get_token(); print('Outlook token saved')"
-```
-
-The token cache is stored in `secrets/` and survives rebuilds.
-
-**LinkedIn.** The first login is manual and needs a visible browser, so do it on a Linux machine with a desktop (a Linux laptop, or WSL2 with GUI support), not on the server:
-
-```bash
-cd backend && uv sync && uv run playwright install chromium
-LINKEDIN_PROFILE_DIR=./li-profile uv run python -m app.channels.linkedin login
-scp -r li-profile ubuntu@<vm-ip>:aiconnectx/secrets/linkedin-profile
-```
-
-A profile created on Windows will not work on the server. Logging in from a new IP can trigger a LinkedIn security check; if it does, the channel disables itself and alerts you (see Operations). Automating LinkedIn is against its terms of service: keep the caps low.
-
-### 6. WhatsApp webhook through a Cloudflare Tunnel
+## WhatsApp webhook
 
 Meta needs a public HTTPS URL for your webhook. A Cloudflare Tunnel provides one without opening any inbound port. You need a domain on Cloudflare (free plan is fine).
 
-1. Cloudflare Zero Trust dashboard > Networks > **Tunnels** > Create a tunnel > **Cloudflared**. Name it, then copy the **token** from the install command.
-2. Put it in `.env`: `CLOUDFLARE_TUNNEL_TOKEN=<token>`.
+1. Cloudflare Zero Trust dashboard > Networks > **Tunnels** > Create a tunnel > **Cloudflared**. Name it, then copy the **token**.
+2. Install `cloudflared` natively (Windows: `winget install Cloudflare.cloudflared`; Ubuntu: Cloudflare's package repo) and run it: `cloudflared tunnel run --token <token>`. Keep the token out of the repo. On the server, install it as a service.
 3. In the tunnel's **Public Hostnames** tab, add:
    - Hostname: `hooks.yourdomain.com`
    - Path: `api/whatsapp/webhook`
-   - Service: `http://backend:8000`
+   - Service: `http://localhost:8000`
 
-   **Publish only this path for the backend.** The rest of the API (drafts, settings, attention items) has no login and must not be reachable from the internet.
-4. To publish the landing page, add a second public hostname: `www.yourdomain.com` (no path) with service `http://frontend:80`, and start the page with `docker compose --profile frontend --profile tunnel up -d`. The page's nginx only forwards the contact form (`POST /api/inquiries`) to the backend and answers 404 for every other `/api` path. Form submissions appear in "Needs attention" and are sent to you on WhatsApp.
-5. Start the tunnel: `docker compose --profile tunnel up -d`
-6. Check it. The first must echo `123`; the second must **not** return `{"status":"ok"}` (expect 404):
+   **Publish only this path.** The rest of the API requires a dashboard login, but it should not face the internet.
+4. Check it. The first must echo `123`; the second must **not** return `{"status":"ok"}` (expect 404):
 
    ```bash
    curl "https://hooks.yourdomain.com/api/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<WHATSAPP_VERIFY_TOKEN>&hub.challenge=123"
    curl -i https://hooks.yourdomain.com/api/health
    ```
-7. Meta for Developers > your app > WhatsApp > Configuration > Webhook:
+5. Meta for Developers > your app > WhatsApp > Configuration > Webhook:
    - Callback URL: `https://hooks.yourdomain.com/api/whatsapp/webhook`
    - Verify token: the value of `WHATSAPP_VERIFY_TOKEN`
    - Subscribe to the **messages** field.
-8. Put the Phone number ID, a permanent access token, the **App secret** (`WHATSAPP_APP_SECRET`, used to verify signatures) and your number in international format without `+` (`WHATSAPP_OWNER_NUMBER`) in `.env`, then `docker compose up -d`.
-9. Message the bot `STATUS` from your phone. The reply confirms the webhook works. Outside the 24-hour window WhatsApp only delivers approved templates: create a template named `owner_notification` with one text variable `{{1}}` in Meta's WhatsApp Manager.
+6. Put the Phone number ID, a permanent access token, the **App secret** (`WHATSAPP_APP_SECRET`, used to verify signatures) and your number in international format without `+` (`WHATSAPP_OWNER_NUMBER`) in `.env`, then restart the API and scheduler.
+7. Message the bot `STATUS` from your phone. The reply confirms the webhook works. Outside the 24-hour window WhatsApp only delivers approved templates: create a template named `owner_notification` with one text variable `{{1}}` in Meta's WhatsApp Manager.
 
-### 7. Open the dashboard
+## Dashboard
 
-Set `JWT_SECRET` in `.env` first (16+ random characters, e.g. `openssl rand -hex 32`). Without it nobody can sign in and every API route except the public ones refuses requests. Then create the first admin on the VM (`docker compose exec backend python -m app.cli create-admin --email you@example.com`, it prompts for a password). Other people register or use Google/Microsoft sign-in (set `GOOGLE_CLIENT_ID/SECRET`, `MS_AUTH_CLIENT_ID/SECRET`, `BACKEND_URL`, `FRONTEND_URL`) and wait as `pending` until an admin approves them. Then start the frontend (`docker compose --profile frontend up -d`).
+Set `JWT_SECRET` in `.env` first; without it nobody can sign in. Create the first admin with `python -m app.cli create-admin --email you@example.com`. Other people register or use Microsoft sign-in (set `MS_AUTH_CLIENT_ID/SECRET`, `BACKEND_URL`, `FRONTEND_URL`) and wait as `pending` until an admin approves them.
 
-The dashboard is not public. Reach it over an SSH tunnel from your laptop:
+From the dashboard you can supervise the agent (overview, leads, drafts, replies, needs attention), pause all sending from the header, re-enable a channel after an error, and change caps, the send window, hold minutes, DRY_RUN, the placement officer details and the search queries. Changes apply to the API immediately and to the scheduler on its next job; a *wider* send window needs a scheduler restart.
+
+## Deploy on Ubuntu
+
+The same steps work natively on an Ubuntu server (22.04 or newer; 2 CPU and 8 GB RAM is comfortable for Chromium plus Postgres):
 
 ```bash
-ssh -L 8081:localhost:8081 -L 8000:localhost:8000 ubuntu@<vm-ip>
+sudo apt install -y postgresql python3-venv python3-pip nodejs npm git nginx
+sudo -u postgres psql -c "CREATE DATABASE aiconnectx;"
+git clone https://github.com/ang4d28/Aiconnectx--outreach-agent.git aiconnectx && cd aiconnectx
+cp .env.example .env && nano .env
+cd backend && python3 -m venv .venv && source .venv/bin/activate
+pip install -e . && playwright install --with-deps chromium
+alembic -c app/db/alembic.ini upgrade head
+python -m app.cli create-admin --email you@example.com
 ```
 
-Open `http://localhost:8081/dashboard` and sign in. Never add port 8081 to the Cloudflare Tunnel: it proxies the whole API (still behind the login, but it should not face the internet). API docs are at `http://localhost:8000/docs`.
+Run the API (`uvicorn app.main:app --host 127.0.0.1 --port 8000`) and the scheduler (`python -m app.scheduler`) as two systemd services with `WorkingDirectory=<repo>/backend`, the venv's python and `Restart=always`, so they come back after a reboot.
 
-From the dashboard you can supervise the agent (overview, leads, drafts, replies, needs attention), pause all sending from the header, re-enable a channel after an error, and change caps, the send window, hold minutes, DRY_RUN, the placement officer details and the search queries. Changes apply to the API immediately and to the scheduler on its next job; a *wider* send window needs `docker compose restart scheduler`.
+Build the frontend with `cd frontend && npm ci && npm run build`, copy `dist/` to `/var/www/aiconnectx` and serve it with `frontend/nginx.conf`. Public port 80 proxies only `POST /api/inquiries`; the private port 8081 serves the dashboard and proxies the whole API, so reach it over an SSH tunnel (`ssh -L 8081:localhost:8081 user@server`). Never publish port 8081 or the full API to the internet.
 
-### 8. Go live
+## Go live
 
-1. Let it run in DRY_RUN for a few days. Check that drafts look right (`GET /api/drafts`), previews reach WhatsApp, and `GET /api/reports/today` and the 20:00 summary make sense.
-2. Set `DRY_RUN=false` in `.env`.
-3. `docker compose up -d --force-recreate backend scheduler`
+1. Let it run in DRY_RUN for a few days. Check that drafts look right, previews reach WhatsApp, and `GET /api/reports/today` and the 20:00 summary make sense.
+2. Set `DRY_RUN=false` in `.env` (or turn it off in dashboard Settings, which asks for confirmation).
+3. Restart the API and scheduler.
 
 Send `STOP` on WhatsApp at any time to pause all sending, `START` to resume.
 
 ## Operations
 
-```bash
-docker compose logs -f scheduler        # what the jobs are doing
-docker compose ps                       # health
-git pull && docker compose build && docker compose up -d     # update
-docker compose exec postgres pg_dump -U connectx connectx > backup.sql   # backup
+Backup and update (PowerShell, from the project root; `backups/` is git-ignored):
+
+```powershell
+New-Item -ItemType Directory -Force backups | Out-Null
+pg_dump -U postgres aiconnectx -f backups\aiconnectx.sql
+
+git pull
+cd backend; pip install -e .; alembic -c app/db/alembic.ini upgrade head
 ```
 
-All services restart automatically (`unless-stopped`), including after a VM reboot.
+On Linux: `pg_dump -U postgres aiconnectx > backups/aiconnectx.sql`. Restart the API and scheduler after updating.
 
 **A channel got disabled** (alert on WhatsApp, item in "Needs attention"): fix the cause, then re-enable:
 
 | Channel | Re-enable |
 |---|---|
-| LinkedIn (captcha / checkpoint) | solve it in a browser, then `docker compose exec scheduler python -m app.channels.linkedin enable` and send `START` on WhatsApp |
+| LinkedIn (captcha / checkpoint) | solve it in a browser, then `python -m app.channels.linkedin enable` and send `START` on WhatsApp |
 | Outlook | `PATCH /api/settings/outlook_disabled` with `{"value": "false"}` |
 | Sheets | `PATCH /api/settings/sheets_disabled` with `{"value": "false"}` |
 
 If the setting does not exist yet, `POST /api/settings` with `{"key": "outlook_disabled", "value": "false"}`.
 
-**Search returns nothing:** SearXNG only answers JSON queries if `json` is listed under `search.formats` in `/etc/searxng/settings.yml` (inside the `searxng_data` volume). Without it the post monitor falls back to DuckDuckGo.
+**Search returns nothing:** the post monitor uses the `duckduckgo-search` library with the queries in `search_queries.yaml` (or those edited on the dashboard). On a rate limit it retries with backoff (3 attempts) and then skips that query; the next run tries again. Look for `DuckDuckGo search failed` in the scheduler log.
 
-**Landing page figures:** the hero's "Companies connected / Students / MoUs signed" chips show only the real numbers you set at build time (`VITE_STAT_COMPANIES`, `VITE_STAT_STUDENTS`, `VITE_STAT_MOUS`, e.g. in `frontend/.env.local`); unset ones are hidden in the production build. Rebuild with `docker compose --profile frontend build frontend`.
+**Landing page figures:** the hero's "Companies connected / Students / MoUs signed" chips show only the real numbers you set at build time (`VITE_STAT_COMPANIES`, `VITE_STAT_STUDENTS`, `VITE_STAT_MOUS`, e.g. in `frontend/.env.local`); unset ones are hidden in the production build. Run `npm run build` again after changing them.
 
 **Messages stay "held":** they only go out between 10:00 and 17:00 IST, when not paused, under the daily caps, and with `DRY_RUN=false`.

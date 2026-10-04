@@ -66,9 +66,7 @@ TEST_ENV: dict[str, str] = {
     "POSTGRES_DB": "connectx_test",
     "POSTGRES_USER": "connectx_test",
     "POSTGRES_PASSWORD": "test-postgres-password",
-    "REDIS_URL": "redis://redis.invalid:6379/0",
     # Search
-    "SEARXNG_URL": "http://searxng.invalid:8080",
     # Guardrails
     "LINKEDIN_DAILY_CAP": "20",
     "EMAIL_DAILY_CAP": "40",

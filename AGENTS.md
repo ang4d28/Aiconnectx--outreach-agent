@@ -11,14 +11,14 @@ AI ConnectX Outreach Agent. Automates university placement outreach: finds Linke
 - **DRY_RUN=true by default** — drafts only, nothing actually sent, until explicitly disabled.
 - **Tech stack:** Python 3.11, FastAPI, SQLAlchemy 2 + Alembic, PostgreSQL, APScheduler, httpx, Playwright, gspread, Microsoft Graph (Outlook), WhatsApp Cloud API.
 - **Frontend:** Vite + React + TypeScript + Tailwind CSS + recharts + lucide-react.
-- **Deployment:** Docker Compose. Secrets only in `.env` — never hardcoded.
+- **Deployment:** native processes (local PostgreSQL, Python venv, Node; later an Ubuntu server). Secrets only in `.env` — never hardcoded.
 
 ## STRUCTURE
 
 ```
 .
 ├── AGENTS.md
-├── docker-compose.yml
+├── scripts/                                 # dev.ps1, dev.sh, seed_demo.py
 ├── .env.example
 ├── backend/
 │   ├── app/
@@ -64,7 +64,6 @@ AI ConnectX Outreach Agent. Automates university placement outreach: finds Linke
 │   │   ├── test_state_machine.py
 │   │   ├── test_guardrails.py
 │   │   └── test_llm.py
-│   └── Dockerfile
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
@@ -120,7 +119,7 @@ If no reply after CONTACTED:
 ## DEVELOPMENT WORKFLOW
 
 1. `cp .env.example .env` and fill in secrets.
-2. `docker-compose up` — PostgreSQL, Redis (APScheduler backing), backend, frontend.
+2. `scripts/dev.ps1` (Windows) or `scripts/dev.sh` (Linux) — backend, scheduler and Vite dev server against local PostgreSQL.
 3. `cd backend && uv run pytest` — run logic tests.
 4. `cd frontend && npm run dev` — frontend hot reload.
 5. Default `DRY_RUN=true` in `.env` — verify everything in drafts before going live.
