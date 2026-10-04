@@ -1,4 +1,4 @@
-"""Multi-user dashboard auth: passwords, Google and Microsoft sign-in, roles, audit trail.
+"""Multi-user dashboard auth: passwords, Microsoft sign-in, roles, audit trail.
 
 The providers are faked at the HTTP transport (FakeProvider): discovery document, JWKS and
 token endpoint answer with ID tokens signed by a test RSA key, so authlib's real state, PKCE,
@@ -334,7 +334,7 @@ class TestLogin:
         assert self.login(client).status_code == 503
         assert client.post("/api/auth/register", json=TestRegister.body).status_code == 503
         assert client.get("/api/auth/me").status_code == 503
-        assert client.get("/api/auth/google/login").status_code == 503
+        assert client.get("/api/auth/microsoft/login").status_code == 503
 
 
 # ─── Sessions ──────────────────────────────────────────────
@@ -791,7 +791,7 @@ class TestAudit:
         assert message.status == MessageStatus.APPROVED and message.reviewed_by is None
 
 
-# ─── Google and Microsoft sign-in ──────────────────────────
+# ─── Microsoft sign-in ─────────────────────────────────────
 
 
 def b64url(data: bytes) -> str:
@@ -814,7 +814,7 @@ JWKS = {
 
 
 class FakeProvider:
-    """Google's or Microsoft's discovery document, JWKS and token endpoint."""
+    """Microsoft's discovery document, JWKS and token endpoint."""
 
     def __init__(self, provider: AuthProvider):
         self.provider = provider
@@ -827,26 +827,22 @@ class FakeProvider:
         self.challenge: str | None = None
 
     @property
-    def google(self) -> bool:
-        return self.provider == AuthProvider.GOOGLE
-
-    @property
     def client_id(self) -> str:
-        return settings.google_client_id if self.google else settings.ms_auth_client_id
+        return settings.ms_auth_client_id
 
     @property
     def metadata_url(self) -> str:
-        return oauth.GOOGLE_METADATA_URL if self.google else oauth.MICROSOFT_METADATA_URL.format(tenant=settings.ms_auth_tenant)
+        return oauth.MICROSOFT_METADATA_URL.format(tenant=settings.ms_auth_tenant)
 
     @property
     def issuer(self) -> str:
-        return "https://accounts.google.com" if self.google else f"https://login.microsoftonline.com/{settings.ms_auth_tenant}/v2.0"
+        return f"https://login.microsoftonline.com/{settings.ms_auth_tenant}/v2.0"
 
     @property
     def metadata(self) -> dict:
         tenant = settings.ms_auth_tenant
-        multi_tenant = not self.google and tenant.lower() in oauth.MICROSOFT_MULTI_TENANT
-        host = "https://oauth2.googleapis.com" if self.google else f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
+        multi_tenant = tenant.lower() in oauth.MICROSOFT_MULTI_TENANT
+        host = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
         return {
             "issuer": "https://login.microsoftonline.com/{tenantid}/v2.0" if multi_tenant else self.issuer,
             "authorization_endpoint": f"{host}/authorize",
@@ -867,8 +863,6 @@ class FakeProvider:
             "email": self.email,
             "name": "Sam Student",
         }
-        if self.google:
-            claims["email_verified"] = True
         claims.update(self.overrides)
         claims = {key: value for key, value in claims.items() if value is not None}
         return jwt.encode(claims, self.key, algorithm="RS256", headers={"kid": KID})
@@ -893,12 +887,11 @@ class FakeProvider:
 
 class FakeProviders:
     def __init__(self) -> None:
-        self.google = FakeProvider(AuthProvider.GOOGLE)
         self.microsoft = FakeProvider(AuthProvider.MICROSOFT)
         self.nonce = ""  # the nonce of the login redirect in progress
 
     def get(self, provider: AuthProvider) -> FakeProvider:
-        return self.google if provider == AuthProvider.GOOGLE else self.microsoft
+        return self.microsoft
 
 
 @pytest.fixture
@@ -906,7 +899,7 @@ def idp(monkeypatch):
     providers = FakeProviders()
 
     async def handler(self, request):  # noqa: ANN001
-        for fake in (providers.google, providers.microsoft):
+        for fake in (providers.microsoft,):
             response = await fake.handle(request, providers.nonce)
             if response is not None:
                 return response
@@ -945,7 +938,7 @@ def landed_with_error(r, code: str) -> bool:
     )
 
 
-PROVIDER_PARAMS = pytest.mark.parametrize("provider", [AuthProvider.GOOGLE, AuthProvider.MICROSOFT], ids=lambda p: p.value)
+PROVIDER_PARAMS = pytest.mark.parametrize("provider", [AuthProvider.MICROSOFT], ids=lambda p: p.value)
 
 
 @PROVIDER_PARAMS
@@ -967,7 +960,7 @@ class TestOAuthSignIn:
         assert first["code_challenge"] != second["code_challenge"]
 
     def test_not_configured_is_503(self, client, idp, provider, monkeypatch):
-        monkeypatch.setattr(settings, "google_client_secret" if provider == AuthProvider.GOOGLE else "ms_auth_client_secret", "")
+        monkeypatch.setattr(settings, "ms_auth_client_secret", "")
         assert client.get(f"/api/auth/{provider.value}/login").status_code == 503
         r = client.get(f"/api/auth/{provider.value}/callback", params={"code": "c", "state": "s"})
         assert landed_with_error(r, "not_configured")
@@ -993,7 +986,7 @@ class TestOAuthSignIn:
         assert request["grant_type"] == "authorization_code" and request["code"] == "auth-code"
         assert request["redirect_uri"] == f"https://api.connectx.test/api/auth/{provider.value}/callback"
         assert b64url(hashlib.sha256(request["code_verifier"].encode()).digest()) == fake.challenge
-        expected_secret = settings.google_client_secret if provider == AuthProvider.GOOGLE else settings.ms_auth_client_secret
+        expected_secret = settings.ms_auth_client_secret
         basic = base64.b64decode(fake.auth_headers[0].removeprefix("Basic ")).decode()
         assert basic == f"{fake.client_id}:{expected_secret}" or request.get("client_secret") == expected_secret
 
@@ -1091,13 +1084,6 @@ class TestOAuthSignIn:
         assert client.get("/api/admin/users").status_code == 403
 
 
-class TestGoogleSpecifics:
-    def test_unverified_google_email_is_refused(self, client, db, idp):
-        idp.google.overrides = {"email_verified": False}
-        assert landed_with_error(sign_in(client, idp, AuthProvider.GOOGLE), "unusable_profile")
-        assert db.scalar(select(User)) is None
-
-
 class TestMicrosoftSpecifics:
     def test_falls_back_to_preferred_username_when_there_is_no_email_claim(self, client, db, idp):
         idp.microsoft.overrides = {"email": None, "preferred_username": "Sam.Pref@Example.test"}
@@ -1135,14 +1121,14 @@ class TestMicrosoftSpecifics:
 
 
 class TestNoCrossProviderLinking:
-    def test_google_sign_in_with_an_admins_email_makes_a_separate_pending_account(self, client, db, idp):
+    def test_microsoft_sign_in_with_an_admins_email_makes_a_separate_pending_account(self, client, db, idp):
         admin = add_user(db, "sam@example.test", UserRole.ADMIN)
-        assert landed_ok(sign_in(client, idp, AuthProvider.GOOGLE))
+        assert landed_ok(sign_in(client, idp, AuthProvider.MICROSOFT))
         db.refresh(admin)
         assert admin.role == UserRole.ADMIN and admin.provider == AuthProvider.PASSWORD and admin.provider_subject is None
-        google = db.scalar(select(User).where(User.provider == AuthProvider.GOOGLE))
-        assert google.id != admin.id and google.role == UserRole.PENDING and google.email == admin.email
-        assert client.get("/api/auth/me").json()["id"] == google.id
+        microsoft = db.scalar(select(User).where(User.provider == AuthProvider.MICROSOFT))
+        assert microsoft.id != admin.id and microsoft.role == UserRole.PENDING and microsoft.email == admin.email
+        assert client.get("/api/auth/me").json()["id"] == microsoft.id
         assert client.get("/api/admin/users").status_code == 403
 
     def test_microsoft_sign_in_does_not_link_to_a_google_account(self, client, db, idp):
@@ -1167,12 +1153,11 @@ class TestNoCrossProviderLinking:
         r = client.post("/api/auth/login", json={"email": "sam@example.test", "password": PASSWORD})
         assert r.status_code == 401
 
-    def test_all_three_providers_can_share_one_email(self, client, db, idp):
+    def test_password_and_microsoft_can_share_one_email(self, client, db, idp):
         add_user(db, "sam@example.test", UserRole.MEMBER)
-        sign_in(client, idp, AuthProvider.GOOGLE)
-        sign_in(TestClient(client.app, follow_redirects=False), idp, AuthProvider.MICROSOFT)
+        sign_in(client, idp, AuthProvider.MICROSOFT)
         users = db.scalars(select(User).order_by(User.id)).all()
-        assert {u.provider for u in users} == set(AuthProvider) and {u.email for u in users} == {"sam@example.test"}
+        assert {u.provider for u in users} == {AuthProvider.PASSWORD, AuthProvider.MICROSOFT} and {u.email for u in users} == {"sam@example.test"}
 
 
 class TestSchema:

@@ -99,7 +99,7 @@ export function RequireAuth() {
   const { user, loading } = useAuth();
   const location = useLocation();
   if (loading) return <Spinner label="Checking your session" />;
-  // Keep the query string: the backend reports a failed Google/Microsoft sign-in as ?auth_error=...
+  // Keep the query string: the backend reports a failed Microsoft sign-in as ?auth_error=...
   if (!user) return <Navigate to={`/login${location.search}`} replace />;
   if (!isActive(user)) return <WaitingApproval />;
   return <Outlet />;

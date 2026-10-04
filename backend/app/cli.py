@@ -4,7 +4,7 @@
     python -m app.cli test-channel outlook --to you@example.com
 
 This is the only way to create an admin. OAuth sign-ins and registrations always start as
-`pending`, and no email claim from Google or Microsoft ever grants a role.
+`pending`, and no email claim from Microsoft ever grants a role.
 """
 
 from __future__ import annotations

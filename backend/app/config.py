@@ -85,9 +85,7 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_expire_hours: int = 12
 
-    # Sign in with Google / Microsoft (OpenID Connect). Separate from MS_CLIENT_ID, which sends Outlook mail.
-    google_client_id: str = ""
-    google_client_secret: str = ""
+    # Sign in with Microsoft (OpenID Connect). Separate from MS_CLIENT_ID, which sends Outlook mail.
     ms_auth_client_id: str = ""
     ms_auth_client_secret: str = ""
     ms_auth_tenant: str = "common"

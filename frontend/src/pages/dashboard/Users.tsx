@@ -24,7 +24,7 @@ const ROLE_TONES: Record<Role, Tone> = {
   pending: "amber",
   disabled: "red",
 };
-const PROVIDER_LABELS: Record<string, string> = { password: "Email", google: "Google", microsoft: "Microsoft" };
+const PROVIDER_LABELS: Record<string, string> = { password: "Email", microsoft: "Microsoft" };
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },

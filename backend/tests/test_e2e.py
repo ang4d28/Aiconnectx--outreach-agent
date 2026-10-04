@@ -283,7 +283,7 @@ class TestIsolation:
     def test_settings_are_dummies_and_dry_run_is_forced(self):
         assert settings.dry_run is True
         assert settings.groq_api_key == "test-groq-key" and settings.whatsapp_token == "test-whatsapp-token"
-        assert settings.google_client_secret == "test-google-client-secret" and settings.postgres_host == "postgres.invalid"
+        assert settings.ms_auth_client_secret == "test-ms-auth-client-secret" and settings.postgres_host == "postgres.invalid"
         assert settings.tpo_email.endswith(".invalid")
 
     def test_database_is_a_throwaway_sqlite(self, db):

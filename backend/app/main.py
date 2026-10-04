@@ -42,5 +42,5 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-install_session_middleware(app)  # holds the Google/Microsoft sign-in state between redirects
+install_session_middleware(app)  # holds the Microsoft sign-in state between redirects
 app.include_router(api_router)

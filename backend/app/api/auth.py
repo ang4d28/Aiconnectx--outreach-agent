@@ -1,4 +1,4 @@
-"""Dashboard accounts: email + password, Google and Microsoft sign-in.
+"""Dashboard accounts: email + password and Microsoft sign-in.
 
 Every new account (registration or first OAuth sign-in) is `pending` and can do nothing
 but call /me until an admin approves it. Accounts are never merged across providers:
@@ -205,7 +205,7 @@ def me(user: User = Depends(get_current_user)) -> UserRead:
     return to_read(user)
 
 
-# ─── Google and Microsoft ──────────────────────────────────
+# ─── Microsoft ──────────────────────────────────
 
 
 def frontend_redirect(path: str = "/dashboard", error: str | None = None) -> RedirectResponse:
@@ -276,16 +276,6 @@ async def oauth_callback(provider: AuthProvider, request: Request, db: Session) 
     response = frontend_redirect()
     set_session_cookie(response, user)
     return response
-
-
-@router.get("/google/login")
-async def google_login(request: Request) -> Response:
-    return await oauth_login(AuthProvider.GOOGLE, request)
-
-
-@router.get("/google/callback")
-async def google_callback(request: Request, db: Session = Depends(get_session)) -> Response:
-    return await oauth_callback(AuthProvider.GOOGLE, request, db)
 
 
 @router.get("/microsoft/login")

@@ -1,4 +1,4 @@
-"""Google and Microsoft sign-in with OpenID Connect (authlib).
+"""Microsoft sign-in with OpenID Connect (authlib).
 
 authlib creates the state, nonce and PKCE (S256) values, keeps them in the short-lived
 OAuth session cookie, and on the callback checks the state, exchanges the code with the
@@ -22,7 +22,6 @@ from app.db.models import AuthProvider
 OAUTH_SESSION_COOKIE = "connectx_oauth"
 OAUTH_SESSION_SECONDS = 600
 
-GOOGLE_METADATA_URL = "https://accounts.google.com/.well-known/openid-configuration"
 MICROSOFT_METADATA_URL = "https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration"
 MICROSOFT_MULTI_TENANT = frozenset({"common", "organizations", "consumers"})
 # Multi-tenant discovery documents list a `{tenantid}` placeholder as the issuer, so the
@@ -31,7 +30,7 @@ MICROSOFT_ISSUER = re.compile(r"https://login\.microsoftonline\.com/[0-9a-fA-F-]
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
-PROVIDERS = (AuthProvider.GOOGLE, AuthProvider.MICROSOFT)
+PROVIDERS = (AuthProvider.MICROSOFT,)
 
 _registry: OAuth | None = None
 
@@ -49,8 +48,6 @@ def install_session_middleware(app: FastAPI) -> None:
 
 
 def credentials(provider: AuthProvider) -> tuple[str, str]:
-    if provider == AuthProvider.GOOGLE:
-        return settings.google_client_id, settings.google_client_secret
     return settings.ms_auth_client_id, settings.ms_auth_client_secret
 
 
@@ -73,11 +70,7 @@ def get_client(provider: AuthProvider) -> Any:
         _registry = OAuth()
         for name in PROVIDERS:
             client_id, client_secret = credentials(name)
-            metadata_url = (
-                GOOGLE_METADATA_URL
-                if name == AuthProvider.GOOGLE
-                else MICROSOFT_METADATA_URL.format(tenant=settings.ms_auth_tenant)
-            )
+            metadata_url = MICROSOFT_METADATA_URL.format(tenant=settings.ms_auth_tenant)
             _registry.register(
                 name=name.value,
                 client_id=client_id,
@@ -115,12 +108,7 @@ def identity_from_claims(provider: AuthProvider, claims: dict[str, Any]) -> OAut
     per-provider uniqueness rule; it never links this account to another provider's.
     """
     subject = str(claims.get("sub") or "").strip()
-    if provider == AuthProvider.GOOGLE:
-        email = str(claims.get("email") or "")
-        if claims.get("email_verified") is False:
-            return None
-    else:
-        email = str(claims.get("email") or claims.get("preferred_username") or "")
+    email = str(claims.get("email") or claims.get("preferred_username") or "")
     email = email.strip().lower()
     if not subject or len(subject) > 255 or not EMAIL_PATTERN.match(email) or len(email) > 254:
         return None
