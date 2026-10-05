@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     ollama_api_key: str = ""
     ollama_model: str = "llama3.2"
 
-    # LinkedIn (persistent Playwright profile; manual first login, no password stored)
+    # LinkedIn (persistent Playwright profile; manual first login, no password stored).
+    # LINKEDIN_ENABLED=false keeps the channel off whatever the session state.
+    linkedin_enabled: bool = True
     linkedin_profile_dir: str = "secrets/linkedin-profile"
     linkedin_headless: bool = True
 

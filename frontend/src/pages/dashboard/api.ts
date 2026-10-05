@@ -134,7 +134,27 @@ export interface DashboardStatus {
   paused: boolean;
   dry_run: boolean;
   disabled_channels: { channel: string; reason: string | null }[];
+  linkedin_needs_login: boolean;
   open_attention: Record<string, number>;
+}
+
+export type ChannelState = "connected" | "needs_login" | "disabled" | "error" | "unknown";
+
+export interface ChannelStatus {
+  channel: "linkedin" | "outlook" | "whatsapp";
+  label: string;
+  state: ChannelState;
+  account_name: string | null;
+  profile_url: string | null;
+  last_checked_at: string | null;
+  detail: string | null;
+}
+
+export interface ChannelsPayload {
+  channels: ChannelStatus[];
+  linkedin_login_running: boolean;
+  display_available: boolean;
+  login_command: string;
 }
 
 export interface Overview {

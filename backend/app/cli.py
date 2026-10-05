@@ -2,6 +2,7 @@
 
     python -m app.cli create-admin --email owner@example.com
     python -m app.cli test-channel outlook --to you@example.com
+    python -m app.cli linkedin-login
 
 This is the only way to create an admin. OAuth sign-ins and registrations always start as
 `pending`, and no email claim from Microsoft ever grants a role.
@@ -13,7 +14,7 @@ import argparse
 import asyncio
 import getpass
 import sys
-from typing import Callable, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 from sqlalchemy import select
 
@@ -120,6 +121,29 @@ async def run_channel_test(channel: str, to: str) -> int:
     return 0
 
 
+async def run_linkedin_login(login: Callable[[], Awaitable[Any]] | None = None) -> int:
+    """Visible browser on the persistent profile at linkedin.com/login (LINKEDIN_HEADLESS is ignored).
+
+    Waits up to 5 minutes for the feed, closes the browser and stores only the status (state, account
+    name, profile URL, time). The password is typed into LinkedIn's own page and never seen here.
+    """
+    from app.channels import linkedin_session
+    from app.channels.status import record_linkedin
+
+    print("A browser window opens at linkedin.com/login. Sign in there (and solve any check by hand).")
+    print("Waiting up to 5 minutes for the LinkedIn feed...")
+    result = await (login or linkedin_session.interactive_login)()
+    try:
+        await record_linkedin(result)
+    except Exception as exc:  # the browser profile keeps the session even if the database is down
+        print(f"Warning: could not save the LinkedIn status ({type(exc).__name__}: {exc})", file=sys.stderr)
+    if result.state == linkedin_session.CONNECTED:
+        print(f"connected as {result.account_name or 'unknown name'}")
+        return 0
+    print(f"FAILED: LinkedIn {result.state.replace('_', ' ')}: {result.detail or 'no details'}", file=sys.stderr)
+    return 1
+
+
 def main(argv: Sequence[str] | None = None, prompt: Prompt = getpass.getpass) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description=__doc__.split("\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -129,7 +153,11 @@ def main(argv: Sequence[str] | None = None, prompt: Prompt = getpass.getpass) ->
     test = commands.add_parser("test-channel", help="send one test message and list recent replies")
     test.add_argument("channel", choices=CHANNELS)
     test.add_argument("--to", required=True, help="email address (outlook) or phone number (whatsapp)")
+    commands.add_parser("linkedin-login", help="sign in to LinkedIn in a visible browser (waits up to 5 minutes)")
     args = parser.parse_args(argv)
+
+    if args.command == "linkedin-login":
+        return asyncio.run(run_linkedin_login())
 
     if args.command == "test-channel":
         return asyncio.run(run_channel_test(args.channel, args.to))

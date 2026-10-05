@@ -18,6 +18,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app import runtime_config
+from app.channels import status as channel_status
 from app.channels.linkedin import DISABLED_KEY as LINKEDIN_DISABLED_KEY
 from app.channels.linkedin import DISABLED_REASON_KEY as LINKEDIN_REASON_KEY
 from app.auth.deps import get_current_user
@@ -148,6 +149,8 @@ def disabled_channels(db: Session) -> list[dict[str, str | None]]:
         if not get_flag(db, key):
             continue
         reason = db.get(Setting, LINKEDIN_REASON_KEY) if channel == "linkedin" else None
+        if reason and reason.value == channel_status.NEEDS_LOGIN_REASON:
+            continue  # shown as its own "LinkedIn needs login" banner
         text = reason.value if reason and reason.value else None
         if text is None:
             match = next((e for e in errors if (e.payload or {}).get("channel") == channel), None)
@@ -170,6 +173,7 @@ def get_status(db: Session = Depends(get_session)) -> dict[str, Any]:
         "paused": get_flag(db, PAUSE_KEY),
         "dry_run": settings.dry_run,
         "disabled_channels": disabled_channels(db),
+        "linkedin_needs_login": channel_status.linkedin_needs_login(db),
         "open_attention": counts,
     }
 

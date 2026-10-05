@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.admin_users import router as admin_users_router
 from app.api.attention import router as attention_router
+from app.api.channels import router as channels_router
 from app.api.auth import router as auth_router
 from app.auth.deps import authorize
 from app.api.dashboard import router as dashboard_router
@@ -31,6 +32,7 @@ protected = [Depends(authorize)]
 for router in (
     admin_users_router,
     attention_router,
+    channels_router,
     companies_router,
     dashboard_router,
     drafts_router,

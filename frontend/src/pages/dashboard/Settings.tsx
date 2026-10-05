@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { HttpError, api } from "./api";
 import type { SettingsPayload, SettingsValues } from "./api";
+import ChannelsSection from "./Channels";
 import { Card, ErrorNote, PageHeader, Spinner, toast } from "./ui";
 
 type Form = Record<keyof SettingsValues, string>;
@@ -137,6 +138,10 @@ export default function Settings() {
     <>
       <PageHeader title="Settings" />
       <div className="grid gap-5 xl:grid-cols-2">
+        <div className="xl:col-span-2">
+          <ChannelsSection />
+        </div>
+
         <Card className="xl:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>

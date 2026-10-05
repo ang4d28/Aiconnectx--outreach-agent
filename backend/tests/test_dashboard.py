@@ -175,10 +175,16 @@ class TestDraftActions:
 
     def test_approve_held_message_releases_it_now(self):
         message = make_message(status=MessageStatus.APPROVED, hold=NOW + timedelta(minutes=8))
+        before = datetime.now(timezone.utc)
         r = app_with(draft_db(message)).post("/dashboard/drafts/1/approve")
+        after = datetime.now(timezone.utc)
         assert r.json()["result"] == "released"
         assert message.review_status == ReviewStatus.APPROVED
-        assert message.hold_until < NOW + timedelta(minutes=8)
+        # released at the real current UTC time (the endpoint uses utc_now, not the fixed NOW)
+        assert message.hold_until.tzinfo is not None
+        assert before <= message.hold_until <= after
+        assert message.reviewed_at == message.hold_until
+        assert message.reviewed_by == 7
 
     def test_approve_reply_draft_releases_it(self):
         message = make_message()

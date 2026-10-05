@@ -35,6 +35,7 @@ TEST_ENV: dict[str, str] = {
     "OLLAMA_API_KEY": "test-ollama-key",
     "OLLAMA_MODEL": "test-ollama-model",
     # LinkedIn
+    "LINKEDIN_ENABLED": "true",
     "LINKEDIN_PROFILE_DIR": os.path.join(_TMP, "linkedin-profile"),
     "LINKEDIN_HEADLESS": "true",
     # Outlook / Microsoft Graph
@@ -213,6 +214,22 @@ def network_guard(monkeypatch):
     yield guard
     # Code under test often swallows exceptions; the recorded attempt still fails the test.
     assert not guard.violations, "\n".join(guard.violations)
+
+
+@pytest.fixture(autouse=True)
+def no_real_browser(monkeypatch):
+    """Playwright is always mocked. A real Chromium launch fails the test, even if the code swallows the error."""
+    import playwright.async_api as pw_api
+
+    attempts: list[str] = []
+
+    def blocked(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        attempts.append("Real browser launch in a test. Mock Playwright (pass a launcher).")
+        raise RuntimeError(attempts[-1])
+
+    monkeypatch.setattr(pw_api, "async_playwright", blocked)
+    yield
+    assert not attempts, attempts[0]
 
 
 # ─── Shared fixtures ───────────────────────────────────────

@@ -11,7 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import Logo from "../../components/Logo";
 import { useAuth } from "../auth/auth";
 import type { AuthUser } from "../auth/auth";
@@ -110,6 +110,25 @@ function Banners({ status }: { status: DashboardStatus | undefined }) {
   if (!status) return null;
   return (
     <div className="space-y-2">
+      {status.linkedin_needs_login && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-rose-400/40 bg-rose-600/90 px-4 py-3 text-sm font-medium text-white"
+        >
+          <span>
+            LinkedIn needs a new login, so all LinkedIn actions are stopped.{" "}
+            {isAdmin ? "Reconnect it under Settings > Channels." : "An admin has to reconnect it."}
+          </span>
+          {isAdmin && (
+            <Link
+              to="/dashboard/settings#channels"
+              className="rounded-lg bg-white px-3 py-1.5 font-semibold text-rose-700 hover:bg-rose-50"
+            >
+              Reconnect LinkedIn
+            </Link>
+          )}
+        </div>
+      )}
       {status.disabled_channels.map((item) => (
         <div
           key={item.channel}

@@ -1,7 +1,9 @@
 """LinkedIn channel: Playwright automation of the owner's own account.
 
 - Persistent browser profile at LINKEDIN_PROFILE_DIR. The first login is done by
-  hand (`python -m app.channels.linkedin login`); no password is ever stored.
+  hand (`python -m app.cli linkedin-login`); no password is ever stored. The
+  session check and the login live in app.channels.linkedin_session.
+- LINKEDIN_ENABLED=false keeps the channel off: no browser is opened at all.
 - One browser session at a time, human pacing: random 5-25s pauses between
   steps, scrolling, per-character typing with variance.
 - LINKEDIN_DAILY_CAP is shared by every write action (comment, connection note,
@@ -178,6 +180,18 @@ class PageDriver:
     async def texts(self, selector: str) -> list[str]:
         return await self.page.locator(selector).all_inner_texts()
 
+    async def text(self, selector: str) -> str:
+        locator = self.page.locator(selector)
+        return (await locator.first.inner_text()) if await locator.count() else ""
+
+    async def wait_for(self, selector: str, timeout_ms: int) -> bool:
+        """Wait until the selector is on the page; False on timeout (or any page error)."""
+        try:
+            await self.page.wait_for_selector(selector, timeout=timeout_ms)
+        except Exception:
+            return False
+        return True
+
     async def attr(self, selector: str, name: str) -> str | None:
         locator = self.page.locator(selector)
         return (await locator.first.get_attribute(name)) if await locator.count() else None
@@ -334,7 +348,7 @@ class LinkedInClient:
 
     @property
     def available(self) -> bool:
-        return not self.store.is_disabled()
+        return settings.linkedin_enabled and not self.store.is_disabled()
 
     def _today(self) -> date:
         return as_utc(self.clock()).astimezone(IST).date()
@@ -343,6 +357,8 @@ class LinkedInClient:
         return max(0, self.daily_cap - self.store.actions_on(self._today()))
 
     def _ensure_available(self) -> None:
+        if not settings.linkedin_enabled:
+            raise LinkedInUnavailable("LinkedIn is switched off (LINKEDIN_ENABLED=false)")
         if self.store.is_disabled():
             raise LinkedInUnavailable("LinkedIn channel is disabled after a security check")
 
@@ -379,7 +395,7 @@ class LinkedInClient:
         text = (
             f"LinkedIn stopped: {reason.replace('_', ' ')} at {url}.\n"
             "The LinkedIn channel is disabled and all sending is paused. Resolve it in the "
-            "browser (python -m app.channels.linkedin login), then run "
+            "browser (python -m app.cli linkedin-login), then run "
             "`python -m app.channels.linkedin enable` and reply START."
         )
         try:
@@ -542,21 +558,14 @@ def get_client() -> LinkedInClient:
 # ─── Manual login / re-enable ──────────────────────────────
 
 
-async def interactive_login(timeout_minutes: int = 10) -> None:
-    """Headed browser on the persistent profile; the owner signs in (and solves any check) by hand."""
-    async with playwright_page(headless=False) as page:
-        await page.goto(f"{BASE_URL}/login")
-        print("Sign in to LinkedIn in the browser window. Waiting for the feed...")
-        await page.wait_for_url("**/feed/**", timeout=timeout_minutes * 60_000)
-        print(f"Logged in. Session saved in {settings.linkedin_profile_dir}.")
-
-
 if __name__ == "__main__":
     import sys
 
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "login":
-        asyncio.run(interactive_login())
+        from app.cli import main as cli_main
+
+        raise SystemExit(cli_main(["linkedin-login"]))
     elif command == "enable":
         DbStore().set_enabled()
         print("LinkedIn channel re-enabled. Reply START on WhatsApp to lift the global pause.")

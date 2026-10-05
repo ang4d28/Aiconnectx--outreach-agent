@@ -9,6 +9,11 @@ channel is disabled (settings key <channel>_disabled) with a second alert, so a
 broken channel stops being hammered. Re-enable by setting the key to false
 (PATCH /api/settings/<key>, or `python -m app.channels.linkedin enable`).
 
+LinkedIn session: linkedin_session checks the persistent profile every 6 hours, and every LinkedIn
+work batch (send queue, connection poll, replies) re-checks it first unless a check in the last 30
+minutes was fine. needs_login stops all LinkedIn actions and opens a "Reconnect LinkedIn" attention
+item (app.channels.status). LINKEDIN_ENABLED=false keeps every LinkedIn job off.
+
 Send-window jobs run only between SEND_WINDOW_START and SEND_WINDOW_END (IST).
 DRY_RUN is respected by the workers themselves; the startup log says which mode
 is active.
@@ -49,6 +54,7 @@ DISABLED_KEYS = {
     "sheets": SHEETS_DISABLED_KEY,
 }
 POST_MONITOR_MINUTES = 150  # every 2.5 hours
+LINKEDIN_SESSION_HOURS = 6
 SHORT_GRACE = 300
 DAILY_GRACE = 3600
 
@@ -110,6 +116,8 @@ class JobMonitor:
             db.close()
 
     def is_channel_disabled(self, channel: str | None) -> bool:
+        if channel == "linkedin" and not settings.linkedin_enabled:
+            return True
         if channel not in DISABLED_KEYS:
             return False
         db = self._session_factory()
@@ -210,6 +218,22 @@ async def in_session(work: Callable[[Any], Awaitable[Any]]) -> Any:
         db.close()
 
 
+async def linkedin_preflight() -> str:
+    """Session check before a LinkedIn work batch (skipped when a recent check was fine). Never raises."""
+    from app.channels.status import linkedin_preflight as preflight
+
+    return await preflight()
+
+
+async def run_linkedin_session() -> Any:
+    from app.channels.status import check_linkedin
+
+    result = await check_linkedin()
+    if result.state == "error":
+        raise RuntimeError(f"LinkedIn session check failed: {result.detail}")
+    return result.state
+
+
 async def run_post_monitor() -> Any:
     from app.workers.post_monitor import run_once
 
@@ -225,6 +249,7 @@ async def run_company_finder() -> Any:
 async def run_send_queue(start_holds: bool) -> Any:
     from app.workers.send_queue import SendQueue
 
+    await linkedin_preflight()
     return await in_session(lambda db: SendQueue(db=db).run_once(start_holds=start_holds))
 
 
@@ -235,12 +260,14 @@ async def run_connection_poll() -> Any:
     async def work(db: Any) -> int:
         return await ReplyWorker(db=db).check_connections(get_client())
 
+    await linkedin_preflight()
     return await in_session(work)
 
 
 async def run_replies() -> Any:
     from app.workers.replies import ReplyWorker
 
+    await linkedin_preflight()
     return await in_session(lambda db: ReplyWorker(db=db).run_once(check_connections=False))
 
 
@@ -315,6 +342,10 @@ async def job_replies() -> None:
     await guarded("replies", run_replies, window_only=True)
 
 
+async def job_linkedin_session() -> None:
+    await guarded("linkedin_session", run_linkedin_session, channel="linkedin")
+
+
 async def job_followups() -> None:
     await guarded("followups", run_followups)
 
@@ -357,6 +388,7 @@ def build_specs() -> list[JobSpec]:
         JobSpec("release_held", job_release_held, CronTrigger(hour=hours, minute="*", timezone=tz), 60),
         JobSpec("connection_poll", job_connection_poll, CronTrigger(hour=f"{first}-{last}/2", minute=0, timezone=tz)),
         JobSpec("replies", job_replies, CronTrigger(hour=hours, minute="0,30", timezone=tz)),
+        JobSpec("linkedin_session", job_linkedin_session, IntervalTrigger(hours=LINKEDIN_SESSION_HOURS, timezone=tz)),
         JobSpec("followups", job_followups, CronTrigger(minute=0, timezone=tz)),
         JobSpec("sheets_sync", job_sheets_sync, CronTrigger(minute="15,45", timezone=tz)),
         JobSpec("daily_summary", job_daily_summary, CronTrigger(hour=20, minute=0, timezone=tz), DAILY_GRACE),

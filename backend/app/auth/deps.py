@@ -3,7 +3,7 @@
 get_current_user  any valid session (also pending and disabled accounts; /me uses it).
 authorize         the dependency on every protected router: viewer to read, member for
                   the draft and attention actions and the Google Sheet sync listed in MEMBER_ACTIONS, admin for
-                  everything else that changes data and for all of /api/admin.
+                  everything else that changes data and for all of /api/admin and /api/channels.
                   A new mutating route is admin-only until it is added to MEMBER_ACTIONS.
 """
 
@@ -35,7 +35,7 @@ RANK: dict[UserRole, int] = {
     UserRole.ADMIN: 3,
 }
 
-ADMIN_ONLY_PREFIXES = ("/api/admin",)
+ADMIN_ONLY_PREFIXES = ("/api/admin", "/api/channels")
 
 # (method, route path template) of the writes a member may do: edit, approve and cancel
 # drafts, and resolve attention items.

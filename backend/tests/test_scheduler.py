@@ -47,7 +47,7 @@ class TestSchedule:
     def test_all_jobs_present(self):
         assert set(triggers()) == {
             "post_monitor", "company_finder", "send_queue", "release_held", "connection_poll",
-            "replies", "followups", "sheets_sync", "daily_summary",
+            "replies", "linkedin_session", "followups", "sheets_sync", "daily_summary",
         }
 
     def test_triggers_match_the_plan(self):
@@ -58,6 +58,7 @@ class TestSchedule:
         assert t["release_held"] == "cron[hour='10-16', minute='*']"
         assert t["connection_poll"] == "cron[hour='10-16/2', minute='0']"
         assert t["replies"] == "cron[hour='10-16', minute='0,30']"
+        assert t["linkedin_session"] == "interval[6:00:00]"
         assert t["followups"] == "cron[minute='0']"
         assert t["sheets_sync"] == "cron[minute='15,45']"
         assert t["daily_summary"] == "cron[hour='20', minute='0']"
