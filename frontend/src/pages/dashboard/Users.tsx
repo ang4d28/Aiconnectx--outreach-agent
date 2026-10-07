@@ -5,7 +5,7 @@ import type { FormEvent } from "react";
 import { useAuth } from "../auth/auth";
 import type { AuthUser, Role } from "../auth/auth";
 import { api } from "./api";
-import { Badge, Card, Drawer, Empty, ErrorNote, PageHeader, Spinner, formatDateTime, titleCase, toast } from "./ui";
+import { Badge, Card, Drawer, Empty, ErrorNote, ListSkeleton, PageHeader, formatDateTime, titleCase, toast } from "./ui";
 import type { Tone } from "./ui";
 
 type Grantable = "viewer" | "member" | "admin";
@@ -174,6 +174,7 @@ function Actions({ user, onResetPassword }: { user: AuthUser; onResetPassword: (
   const done = (message: string) => {
     toast(message);
     void client.invalidateQueries({ queryKey: ["users"] });
+    void client.invalidateQueries({ queryKey: ["badges"] });
   };
   const fail = (error: unknown) => toast(error instanceof Error ? error.message : "Action failed", "error");
 
@@ -307,7 +308,7 @@ export default function Users() {
         ))}
       </div>
 
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && visible.length === 0 && <Empty>No users here.</Empty>}
 

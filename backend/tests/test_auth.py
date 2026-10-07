@@ -1196,7 +1196,7 @@ class TestSchema:
 
     def test_migration_chain(self):
         script = ScriptDirectory(str(Path(app_db_package.__file__).parent / "alembic"))
-        assert script.get_heads() == ["009_message_blocked"]
+        assert script.get_heads() == ["010_perf_indexes"]
         assert script.get_revision("006_users").down_revision == "005_inquiries"
 
 

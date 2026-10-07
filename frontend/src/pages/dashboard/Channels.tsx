@@ -4,7 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HttpError, api } from "./api";
 import type { ChannelState, ChannelStatus, ChannelsPayload } from "./api";
-import { Badge, Card, ErrorNote, Spinner, formatDateTime, toast } from "./ui";
+import { Badge, Card, ErrorNote, ListSkeleton, formatDateTime, toast } from "./ui";
 import type { Tone } from "./ui";
 
 const ICONS: Record<ChannelStatus["channel"], LucideIcon> = {
@@ -27,8 +27,12 @@ function useChannels() {
   return useQuery({
     queryKey: ["channels"],
     queryFn: () => api.get<ChannelsPayload>("/channels/status"),
-    // Poll quickly while a LinkedIn login window is open, so the card flips to Connected by itself.
-    refetchInterval: (query) => (query.state.data?.linkedin_login_running ? 3_000 : 60_000),
+    // This only reads the saved status. Poll quickly while a check or the LinkedIn login window is running,
+    // so the card updates by itself when the background work finishes.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && (data.checking.length > 0 || data.linkedin_login_running) ? 2_000 : 60_000;
+    },
   });
 }
 
@@ -45,17 +49,31 @@ function ChannelCard({ item, payload }: { item: ChannelStatus; payload: Channels
     client.invalidateQueries({ queryKey: ["status"] });
   };
 
+  // The server answers 202 at once and runs the check in the background; the card shows "Checking..." until
+  // the saved status says it is done (GET /channels/status lists the checks still running).
   const check = useMutation({
-    mutationFn: () => api.post<ChannelStatus>(`/channels/${item.channel}/check`),
-    onSuccess: (row) => {
+    mutationFn: () => api.post<{ channel: string; checking: boolean }>(`/channels/${item.channel}/check`),
+    onSuccess: () => {
       client.setQueryData<ChannelsPayload>(["channels"], (current) =>
-        current ? { ...current, channels: current.channels.map((c) => (c.channel === row.channel ? row : c)) } : current,
+        current && !current.checking.includes(item.channel) ? { ...current, checking: [...current.checking, item.channel] } : current,
       );
-      refresh();
-      toast(`${row.label}: ${STATES[row.state]?.label ?? row.state}`, row.state === "connected" ? "ok" : "error");
+      client.invalidateQueries({ queryKey: ["channels"] });
     },
-    onError: (error) => toast(error instanceof Error ? error.message : "The check failed", "error"),
+    onError: (error) => toast(error instanceof Error ? error.message : "Could not start the check", "error"),
   });
+
+  const checking = check.isPending || payload.checking.includes(item.channel);
+
+  // When a running check finishes, say what it found and refresh the header banner.
+  const wasChecking = useRef(false);
+  useEffect(() => {
+    if (wasChecking.current && !checking) {
+      refresh();
+      toast(`${item.label}: ${state.label}`, item.state === "connected" ? "ok" : "error");
+    }
+    wasChecking.current = checking;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checking]);
 
   const connect = useMutation({
     mutationFn: () => api.post<{ started: boolean; message: string }>("/channels/linkedin/connect"),
@@ -67,7 +85,7 @@ function ChannelCard({ item, payload }: { item: ChannelStatus; payload: Channels
       setNote({ text: error instanceof HttpError ? error.message : "Could not start the LinkedIn login", tone: "warn" }),
   });
 
-  const busy = check.isPending || loginRunning;
+  const busy = checking || loginRunning;
 
   return (
     <Card className="flex flex-col">
@@ -144,8 +162,8 @@ function ChannelCard({ item, payload }: { item: ChannelStatus; payload: Channels
 
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
         <button type="button" className="btn-ghost btn-sm" disabled={busy} onClick={() => check.mutate()}>
-          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${check.isPending ? "animate-spin motion-reduce:animate-none" : ""}`} />
-          {check.isPending ? "Checking..." : "Check now"}
+          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} />
+          {checking ? "Checking..." : "Check now"}
         </button>
         {isLinkedIn && (
           <button
@@ -187,7 +205,7 @@ export default function ChannelsSection() {
         Connection status of each channel. LinkedIn is checked every 6 hours and before each LinkedIn batch.
       </p>
       {isLoading ? (
-        <Spinner label="Loading channels" />
+        <ListSkeleton rows={3} label="Loading channels" />
       ) : !data ? (
         <ErrorNote error={error} retry={() => refetch()} />
       ) : (

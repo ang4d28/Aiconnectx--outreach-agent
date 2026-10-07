@@ -4,19 +4,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/auth";
 import { api, qs } from "./api";
 import type { Draft, Page } from "./api";
-import {
-  Badge,
-  Card,
-  ChannelBadge,
-  Countdown,
-  Empty,
-  ErrorNote,
-  PageHeader,
-  Pagination,
-  Spinner,
-  StatusBadge,
-  toast,
-} from "./ui";
+import { Badge, Card, ChannelBadge, Countdown, Empty, ErrorNote, ListSkeleton, PageHeader, Pagination, StatusBadge, toast } from "./ui";
 
 type View = "awaiting" | "held" | "sent" | "closed" | "all";
 
@@ -257,7 +245,7 @@ export default function Drafts() {
         </div>
       )}
 
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && data.items.length === 0 && <Empty>Nothing here.</Empty>}
       {data && (

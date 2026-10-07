@@ -162,33 +162,29 @@ class Stats:
 
 
 def collect_stats(db: Any, now: datetime) -> Stats:
+    """Today's numbers in four queries: sends per channel, replies, held messages, attention items."""
     start = ist_day_start(now)
     stats = Stats(date=as_utc(now).astimezone(IST).strftime("%a %d %b"))
+    per_channel = {
+        channel: (sent, first)
+        for channel, sent, first in db.execute(
+            select(
+                Outreach.channel,
+                func.count(Message.id).filter(Message.sent_at >= start),
+                func.min(Message.sent_at),
+            )
+            .join(Outreach, Outreach.id == Message.outreach_id)
+            .where(Message.status == MessageStatus.SENT, Message.direction == MessageDirection.OUTBOUND)
+            .group_by(Outreach.channel)
+        ).all()
+    }
     for channel in ChannelType:
-        sent_filter = [
-            Outreach.channel == channel,
-            Message.status == MessageStatus.SENT,
-            Message.direction == MessageDirection.OUTBOUND,
-        ]
-        stats.sent[channel.value] = db.scalar(
-            select(func.count(Message.id))
-            .join(Outreach, Outreach.id == Message.outreach_id)
-            .where(*sent_filter, Message.sent_at >= start)
-        ) or 0
-        first_send = db.scalar(
-            select(func.min(Message.sent_at))
-            .join(Outreach, Outreach.id == Message.outreach_id)
-            .where(*sent_filter)
-        )
+        sent, first_send = per_channel.get(channel, (0, None))
+        stats.sent[channel.value] = sent or 0
         stats.caps[channel.value] = daily_cap(channel, first_send, now)
     stats.replies = db.scalar(
         select(func.count(Message.id)).where(
             Message.direction == MessageDirection.INBOUND, Message.sent_at >= start
-        )
-    ) or 0
-    stats.interested = db.scalar(
-        select(func.count(AttentionItem.id)).where(
-            AttentionItem.type == AttentionType.INTERESTED, AttentionItem.created_at >= start
         )
     ) or 0
     held = db.scalar(
@@ -198,19 +194,19 @@ def collect_stats(db: Any, now: datetime) -> Stats:
             Message.review_status.in_(OPEN_REVIEW),
         )
     ) or 0
-    open_questions = db.scalar(
-        select(func.count(AttentionItem.id)).where(
-            AttentionItem.type == AttentionType.QUESTION,
-            AttentionItem.status == AttentionStatus.OPEN,
+    is_open = AttentionItem.status == AttentionStatus.OPEN
+    interested, open_questions, channel_errors = db.execute(
+        select(
+            func.count(AttentionItem.id).filter(
+                AttentionItem.type == AttentionType.INTERESTED, AttentionItem.created_at >= start
+            ),
+            func.count(AttentionItem.id).filter(AttentionItem.type == AttentionType.QUESTION, is_open),
+            func.count(AttentionItem.id).filter(AttentionItem.type == AttentionType.CHANNEL_ERROR, is_open),
         )
-    ) or 0
-    stats.pending_reviews = held + open_questions
-    stats.channel_errors = db.scalar(
-        select(func.count(AttentionItem.id)).where(
-            AttentionItem.type == AttentionType.CHANNEL_ERROR,
-            AttentionItem.status == AttentionStatus.OPEN,
-        )
-    ) or 0
+    ).one()
+    stats.interested = interested or 0
+    stats.pending_reviews = held + (open_questions or 0)
+    stats.channel_errors = channel_errors or 0
     return stats
 
 

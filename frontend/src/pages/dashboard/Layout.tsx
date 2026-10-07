@@ -11,13 +11,14 @@ import {
   Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Suspense, useEffect } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import Logo from "../../components/Logo";
 import { useAuth } from "../auth/auth";
-import type { AuthUser } from "../auth/auth";
 import { HttpError, api } from "./api";
-import type { DashboardStatus } from "./api";
-import { Badge, Toaster, titleCase, toast } from "./ui";
+import type { Badges, DashboardStatus } from "./api";
+import { preloadPages } from "./pages";
+import { Badge, ListSkeleton, Toaster, titleCase, toast } from "./ui";
 
 interface NavItem {
   to: string;
@@ -47,8 +48,14 @@ function useStatus() {
   });
 }
 
-function attentionCount(status: DashboardStatus | undefined): number {
-  return status ? Object.values(status.open_attention).reduce((sum, n) => sum + n, 0) : 0;
+/** The sidebar counts (attention, inquiries, pending accounts) from one lightweight endpoint. */
+function useBadges() {
+  return useQuery({
+    queryKey: ["badges"],
+    queryFn: () => api.get<Badges>("/dashboard/badges"),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
 }
 
 function PauseSwitch({ status }: { status: DashboardStatus | undefined }) {
@@ -155,33 +162,29 @@ function Banners({ status }: { status: DashboardStatus | undefined }) {
   );
 }
 
-function usePendingUsers(enabled: boolean) {
-  return useQuery({
-    queryKey: ["users", "pending-count"],
-    queryFn: async () => (await api.get<{ items: AuthUser[]; total: number }>("/admin/users?role=pending&limit=1")).total,
-    enabled,
-    refetchInterval: 30_000,
-  });
-}
-
-function useNewInquiries() {
-  return useQuery({
-    queryKey: ["inquiries", "new-count"],
-    queryFn: async () => (await api.get<{ new: number }>("/inquiries/new-count")).new,
-    refetchInterval: 30_000,
-  });
-}
-
 export default function Layout() {
   const { user, isAdmin, logout } = useAuth();
   const { data: status } = useStatus();
-  const { data: newInquiries = 0 } = useNewInquiries();
-  const { data: pendingUsers = 0 } = usePendingUsers(isAdmin);
-  const pending = attentionCount(status);
+  const { data: badges } = useBadges();
   const nav = NAV.filter((item) => isAdmin || !item.adminOnly);
   const badgeFor = (to: string): number =>
-    to.endsWith("attention") ? pending : to.endsWith("users") ? pendingUsers : to.endsWith("inquiries") ? newInquiries : 0;
+    to.endsWith("attention")
+      ? badges?.attention ?? 0
+      : to.endsWith("users")
+        ? badges?.users_pending ?? 0
+        : to.endsWith("inquiries")
+          ? badges?.inquiries_new ?? 0
+          : 0;
   const onLogout = () => void logout();
+
+  // Once the first screen is up, fetch the other pages' code in the background so tab clicks are instant.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      preloadPages(["Leads", "Drafts", "Replies", "Attention", "Inquiries"]);
+      if (isAdmin) preloadPages(["Settings", "Users"]);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [isAdmin]);
 
   return (
     <div className="min-h-screen md:pl-60">
@@ -250,7 +253,10 @@ export default function Layout() {
       </header>
 
       <main className="px-4 pb-28 pt-6 sm:px-6 md:pb-10">
-        <Outlet />
+        {/* The shell above is already on screen; only this area waits for a page's code. */}
+        <Suspense fallback={<ListSkeleton label="Loading page" />}>
+          <Outlet />
+        </Suspense>
       </main>
 
       <nav

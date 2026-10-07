@@ -9,6 +9,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -134,6 +135,7 @@ class User(Base):
     __table_args__ = (
         UniqueConstraint("provider", "provider_subject", name="uq_users_provider_subject"),
         UniqueConstraint("provider", "email", name="uq_users_provider_email"),
+        Index("ix_users_role", "role"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -178,6 +180,9 @@ class Company(Base):
 
 class Contact(Base):
     __tablename__ = "contacts"
+    __table_args__ = (
+        Index("ix_contacts_company_id", "company_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(
@@ -209,6 +214,11 @@ class Contact(Base):
 
 class Post(Base):
     __tablename__ = "posts"
+    __table_args__ = (
+        Index("ix_posts_status", "status"),
+        Index("ix_posts_company_id", "company_id"),
+        Index("ix_posts_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     url: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
@@ -236,6 +246,14 @@ class Post(Base):
 
 class Outreach(Base):
     __tablename__ = "outreaches"
+    __table_args__ = (
+        Index("ix_outreaches_state", "state"),
+        Index("ix_outreaches_channel_state", "channel", "state"),
+        Index("ix_outreaches_contact_id", "contact_id"),
+        Index("ix_outreaches_post_id", "post_id"),
+        Index("ix_outreaches_created_at", "created_at"),
+        Index("ix_outreaches_follow_up_due", "follow_up_due"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(
@@ -270,6 +288,11 @@ class Outreach(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        Index("ix_messages_outreach_direction", "outreach_id", "direction"),
+        Index("ix_messages_direction_status", "direction", "status"),
+        Index("ix_messages_sent_at", "sent_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     outreach_id: Mapped[int] = mapped_column(
@@ -316,6 +339,10 @@ class Setting(Base):
 
 class AttentionItem(Base):
     __tablename__ = "attention_items"
+    __table_args__ = (
+        Index("ix_attention_items_status_type", "status", "type"),
+        Index("ix_attention_items_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[AttentionType] = mapped_column(
@@ -338,6 +365,9 @@ class AttentionItem(Base):
 
 class NotificationLog(Base):
     __tablename__ = "notifications_log"
+    __table_args__ = (
+        Index("ix_notifications_log_type_sent_at", "type", "sent_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -351,6 +381,10 @@ class Inquiry(Base):
     """Contact-form submission from the public landing page."""
 
     __tablename__ = "inquiries"
+    __table_args__ = (
+        Index("ix_inquiries_status_created_at", "status", "created_at"),
+        Index("ix_inquiries_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)

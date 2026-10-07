@@ -42,6 +42,55 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
   );
 }
 
+/** A pulsing placeholder block. Decorative: the wrappers below announce "Loading" once. */
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div aria-hidden="true" className={`animate-pulse rounded-lg bg-white/[0.06] motion-reduce:animate-none ${className}`} />;
+}
+
+function Busy({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="status" aria-busy="true">
+      <span className="sr-only">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Placeholder for a row of stat cards. */
+export function CardsSkeleton({ count = 5, label = "Loading" }: { count?: number; label?: string }) {
+  return (
+    <Busy label={label}>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+        {Array.from({ length: count }, (_, n) => (
+          <Skeleton key={n} className="h-28 rounded-2xl" />
+        ))}
+      </div>
+    </Busy>
+  );
+}
+
+/** Placeholder for a list or table of rows (the page header stays on screen above it). */
+export function ListSkeleton({ rows = 6, label = "Loading" }: { rows?: number; label?: string }) {
+  return (
+    <Busy label={label}>
+      <div className="space-y-3">
+        {Array.from({ length: rows }, (_, n) => (
+          <Skeleton key={n} className="h-16 rounded-2xl" />
+        ))}
+      </div>
+    </Busy>
+  );
+}
+
+/** Placeholder for a chart card. */
+export function ChartSkeleton({ className = "h-64 sm:h-72" }: { className?: string }) {
+  return (
+    <Busy label="Loading chart">
+      <Skeleton className={`${className} rounded-xl`} />
+    </Busy>
+  );
+}
+
 export function ErrorNote({ error, retry }: { error: unknown; retry?: () => void }) {
   const message = error instanceof Error ? error.message : "Something went wrong.";
   return (

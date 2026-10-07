@@ -253,31 +253,82 @@ class TestDraftActions:
 
 
 class TestStatusAndPause:
-    def db(self, flags):
-        db = MagicMock()
-        db.get.side_effect = lambda model, key: Setting(key=key, value=flags[key]) if key in flags else None
-        db.scalars.return_value = iter([
-            AttentionItem(id=2, type=AttentionType.CHANNEL_ERROR, status=AttentionStatus.OPEN,
+    def seeded(self, db, flags):
+        db.add_all(Setting(key=key, value=value) for key, value in flags.items())
+        db.add_all([
+            AttentionItem(type=AttentionType.CHANNEL_ERROR, status=AttentionStatus.OPEN,
                           payload={"channel": "outlook", "error": "GraphError: 401"}),
+            AttentionItem(type=AttentionType.INTERESTED, status=AttentionStatus.OPEN, payload={}),
+            AttentionItem(type=AttentionType.INTERESTED, status=AttentionStatus.OPEN, payload={}),
+            AttentionItem(type=AttentionType.QUESTION, status=AttentionStatus.OPEN, payload={}),
+            AttentionItem(type=AttentionType.QUESTION, status=AttentionStatus.RESOLVED, payload={}),
         ])
-        db.execute.return_value.all.return_value = [(AttentionType.INTERESTED, 2), (AttentionType.QUESTION, 1)]
+        db.commit()
         return db
 
-    def test_status_lists_disabled_channels_with_reasons(self, monkeypatch):
+    def test_status_lists_disabled_channels_with_reasons(self, db, monkeypatch):
         monkeypatch.setattr(settings, "dry_run", True)
         flags = {"global_pause": "true", "linkedin_disabled": "true", "linkedin_disabled_reason": "captcha",
                  "outlook_disabled": "true"}
-        body = app_with(self.db(flags)).get("/dashboard/status").json()
+        body = app_with(self.seeded(db, flags)).get("/dashboard/status").json()
         assert body["paused"] is True and body["dry_run"] is True
         assert body["disabled_channels"] == [
             {"channel": "linkedin", "reason": "captcha"},
             {"channel": "outlook", "reason": "GraphError: 401"},
         ]
-        assert body["open_attention"] == {"interested": 2, "question": 1}
+        assert body["open_attention"] == {"channel_error": 1, "interested": 2, "question": 1}
 
-    def test_clean_status(self):
-        body = app_with(self.db({})).get("/dashboard/status").json()
+    def test_clean_status(self, db):
+        body = app_with(self.seeded(db, {})).get("/dashboard/status").json()
         assert body["paused"] is False and body["disabled_channels"] == []
+        assert body["linkedin_needs_login"] is False
+
+    def test_status_is_two_queries_when_nothing_is_stopped(self, db):
+        from sqlalchemy import event
+
+        self.seeded(db, {})
+        counted = []
+
+        def count(*args):  # noqa: ANN002
+            counted.append(1)
+
+        event.listen(db.get_bind(), "before_cursor_execute", count)
+        try:
+            app_with(db).get("/dashboard/status")
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", count)
+        assert len(counted) == 2  # one settings read, one attention count
+
+    def test_login_stop_is_its_own_banner_not_a_disabled_channel(self, db, monkeypatch):
+        monkeypatch.setattr(settings, "linkedin_enabled", True)
+        flags = {"linkedin_disabled": "true", "linkedin_disabled_reason": "needs_login"}
+        body = app_with(self.seeded(db, flags)).get("/dashboard/status").json()
+        assert body["linkedin_needs_login"] is True and body["disabled_channels"] == []
+
+    def test_badges_for_a_member_hide_the_pending_user_count(self, db):
+        from app.db.models import AuthProvider, Inquiry, User, UserRole
+
+        self.seeded(db, {})
+        db.add_all([
+            Inquiry(name="A", email="a@x.test", interest="hire", message="hello there", status="new"),
+            Inquiry(name="B", email="b@x.test", interest="hire", message="hello there", status="closed"),
+            User(email="p@x.test", name="P", provider=AuthProvider.PASSWORD, role=UserRole.PENDING),
+        ])
+        db.commit()
+        body = app_with(db).get("/dashboard/badges").json()  # MEMBER is not an admin
+        assert body == {"attention": 4, "inquiries_new": 1, "users_pending": None}
+
+    def test_badges_for_an_admin_include_pending_users(self, db):
+        from app.db.models import AuthProvider, User, UserRole
+
+        db.add_all([User(email=f"p{i}@x.test", name="P", provider=AuthProvider.PASSWORD, role=UserRole.PENDING)
+                    for i in range(2)])
+        db.commit()
+        application = FastAPI()
+        application.include_router(dashboard.router)
+        application.dependency_overrides[get_session] = lambda: db
+        application.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, role=UserRole.ADMIN)
+        assert TestClient(application).get("/dashboard/badges").json()["users_pending"] == 2
 
     def test_pause_switch_sets_the_global_flag(self):
         db = FakeSettingsDb()
@@ -319,29 +370,75 @@ class TestOverviewHelpers:
         assert rows[-2]["leads"] == 1
         assert sum(r["replies"] for r in rows) == 0
 
-    def test_funnel_counts(self):
-        db = MagicMock()
-        db.scalar.side_effect = [120, 90, 60, 20, 5]
+    def seed_funnel(self, db):
+        from app.db.models import Company, Contact, Message, Outreach
+
+        company = Company(name="Acme")
+        db.add(company)
+        db.flush()
+        outreaches = []
+        for index, state in enumerate([OutreachState.DRAFTED, OutreachState.REPLIED, OutreachState.INTERESTED,
+                                       OutreachState.INTERESTED]):
+            contact = Contact(company_id=company.id, name=f"P{index}", email=f"p{index}@x.test")
+            db.add(contact)
+            db.flush()
+            outreach = Outreach(contact_id=contact.id, channel=ChannelType.EMAIL, state=state)
+            db.add(outreach)
+            outreaches.append(outreach)
+        db.flush()
+
+        def message(outreach, direction, status):
+            db.add(Message(outreach_id=outreach.id, direction=direction, content="x", status=status, sent_at=NOW))
+
+        out, inbound = MessageDirection.OUTBOUND, MessageDirection.INBOUND
+        message(outreaches[0], out, MessageStatus.DRAFTED)  # drafted only
+        message(outreaches[1], out, MessageStatus.SENT)
+        message(outreaches[1], out, MessageStatus.SENT)  # two sends still count the lead once
+        message(outreaches[1], inbound, MessageStatus.SENT)
+        message(outreaches[2], out, MessageStatus.SENT)
+        message(outreaches[2], inbound, MessageStatus.SENT)
+        db.commit()
+        return outreaches
+
+    def test_funnel_counts(self, db):
+        self.seed_funnel(db)
         assert dashboard.funnel_counts(db) == [
-            {"stage": "Leads", "count": 120}, {"stage": "Drafted", "count": 90},
-            {"stage": "Sent", "count": 60}, {"stage": "Replied", "count": 20},
-            {"stage": "Interested", "count": 5},
+            {"stage": "Leads", "count": 4}, {"stage": "Drafted", "count": 3},
+            {"stage": "Sent", "count": 2}, {"stage": "Replied", "count": 2},
+            {"stage": "Interested", "count": 2},
         ]
 
-    def test_overview_assembles_cards(self, monkeypatch):
+    def test_funnel_of_an_empty_database(self, db):
+        assert [row["count"] for row in dashboard.funnel_counts(db)] == [0, 0, 0, 0, 0]
+
+    def test_overview_assembles_cards(self, db, monkeypatch):
         from app.workers import reports
 
         stats = reports.Stats(date="x", sent={"linkedin": 3, "email": 2}, caps={"linkedin": 20, "email": 20},
                               replies=4, interested=1)
         monkeypatch.setattr(reports, "collect_stats", lambda db, now: stats)
-        db = MagicMock()
-        db.scalar.side_effect = [7, 12] + [10, 8, 6, 4, 2]  # leads today, drafts pending, funnel
-        db.scalars.side_effect = [iter([NOW]), iter([NOW]), iter([NOW])]
+        self.seed_funnel(db)  # four outreaches created now, one message still a draft
         body = app_with(db).get("/dashboard/overview").json()
-        assert body["cards"] == {"leads_today": 7, "drafts_pending": 12, "sent_today": 5,
+        assert body["cards"] == {"leads_today": 4, "drafts_pending": 1, "sent_today": 5,
                                  "replies_today": 4, "interested_today": 1}
-        assert len(body["activity"]) == 14 and body["funnel"][0]["count"] == 10
+        assert len(body["activity"]) == 14 and body["funnel"][0]["count"] == 4
         assert body["caps"]["limits"] == {"linkedin": 20, "email": 20}
+
+    def test_overview_query_count_stays_small(self, db):
+        from sqlalchemy import event
+
+        self.seed_funnel(db)
+        counted = []
+
+        def count(*args):  # noqa: ANN002
+            counted.append(1)
+
+        event.listen(db.get_bind(), "before_cursor_execute", count)
+        try:
+            assert app_with(db).get("/dashboard/overview").status_code == 200
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", count)
+        assert len(counted) <= 12  # was 19 before the round-trips were merged
 
 
 class TestPaginationAndQueries:

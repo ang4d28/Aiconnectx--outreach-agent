@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/auth";
 import { api, qs } from "./api";
 import type { Inquiry, InquiryStatus, Page } from "./api";
-import { Badge, Drawer, Empty, ErrorNote, PageHeader, Pagination, Spinner, formatDateTime, titleCase, toast } from "./ui";
+import { Badge, Drawer, Empty, ErrorNote, ListSkeleton, PageHeader, Pagination, formatDateTime, titleCase, toast } from "./ui";
 import type { Tone } from "./ui";
 
 type Filter = "all" | InquiryStatus;
@@ -40,6 +40,7 @@ function InquiryDrawer({ inquiry, onClose }: { inquiry: Inquiry; onClose: () => 
     onSuccess: () => {
       toast("Inquiry saved");
       void client.invalidateQueries({ queryKey: ["inquiries"] });
+      void client.invalidateQueries({ queryKey: ["badges"] });
     },
     onError: (error) => toast(error instanceof Error ? error.message : "Could not save", "error"),
   });
@@ -152,7 +153,7 @@ export default function Inquiries() {
         ))}
       </div>
 
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && data.items.length === 0 && <Empty>No inquiries here yet.</Empty>}
 

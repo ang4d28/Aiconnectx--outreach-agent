@@ -143,17 +143,75 @@ class TestSummary:
         assert data["total_sent"] == 13 and data["interested"] == 1
         assert data["text"].startswith("Daily summary")
 
-    def test_collect_stats_maps_queries_in_order(self):
-        db = MagicMock()
+    def test_collect_stats_counts_today(self, db):
+        from app.db.models import (
+            AttentionItem, AttentionStatus, AttentionType, Company, Contact, Message,
+            MessageDirection, MessageStatus, Outreach, ReviewStatus,
+        )
+
+        company = Company(name="Acme")
+        db.add(company)
+        db.flush()
+        outreaches = {}
+        for index, channel in enumerate(ChannelType):
+            contact = Contact(company_id=company.id, name=f"P{index}", email=f"p{index}@x.test")
+            db.add(contact)
+            db.flush()
+            outreaches[channel] = Outreach(contact_id=contact.id, channel=channel)
+            db.add(outreaches[channel])
+        db.flush()
         old = IN_WINDOW - timedelta(days=30)
-        # linkedin sent, linkedin first send, email sent, email first send,
-        # replies, interested, held, open questions, channel errors
-        db.scalar.side_effect = [9, old, 4, None, 3, 1, 2, 1, 1]
+
+        def message(channel, direction, status, at, review=ReviewStatus.PENDING_REVIEW):
+            db.add(Message(outreach_id=outreaches[channel].id, direction=direction, content="x",
+                           status=status, sent_at=at, created_at=at, review_status=review))
+
+        out, inbound = MessageDirection.OUTBOUND, MessageDirection.INBOUND
+        message(ChannelType.LINKEDIN, out, MessageStatus.SENT, old)  # the first send: ramp is over for LinkedIn
+        for _ in range(3):
+            message(ChannelType.LINKEDIN, out, MessageStatus.SENT, IN_WINDOW)
+        for _ in range(2):
+            message(ChannelType.EMAIL, out, MessageStatus.SENT, IN_WINDOW)
+        message(ChannelType.EMAIL, out, MessageStatus.DRAFTED, IN_WINDOW)  # not sent: not counted
+        for _ in range(3):
+            message(ChannelType.EMAIL, inbound, MessageStatus.SENT, IN_WINDOW)
+        message(ChannelType.EMAIL, inbound, MessageStatus.SENT, old)  # an old reply
+        for _ in range(2):
+            message(ChannelType.LINKEDIN, out, MessageStatus.APPROVED, IN_WINDOW)  # held for review
+        message(ChannelType.LINKEDIN, out, MessageStatus.APPROVED, IN_WINDOW, ReviewStatus.CANCELLED)  # not held
+        for kind, status_, at in [
+            (AttentionType.INTERESTED, AttentionStatus.OPEN, IN_WINDOW),
+            (AttentionType.INTERESTED, AttentionStatus.OPEN, old),
+            (AttentionType.QUESTION, AttentionStatus.OPEN, IN_WINDOW),
+            (AttentionType.QUESTION, AttentionStatus.RESOLVED, IN_WINDOW),
+            (AttentionType.CHANNEL_ERROR, AttentionStatus.OPEN, IN_WINDOW),
+            (AttentionType.CHANNEL_ERROR, AttentionStatus.DISMISSED, IN_WINDOW),
+        ]:
+            db.add(AttentionItem(type=kind, status=status_, payload={}, created_at=at))
+        db.commit()
+
         stats = collect_stats(db, IN_WINDOW)
-        assert stats.sent == {"linkedin": 9, "email": 4}
+        assert stats.sent == {"linkedin": 3, "email": 2}
         assert stats.caps == {"linkedin": 40, "email": 20}
         assert (stats.replies, stats.interested, stats.pending_reviews, stats.channel_errors) == (3, 1, 3, 1)
         assert stats.date == "Mon 05 Oct"
+
+    def test_collect_stats_is_four_queries_and_handles_an_empty_database(self, db):
+        from sqlalchemy import event
+
+        counted = []
+
+        @event.listens_for(db.get_bind(), "before_cursor_execute")
+        def count(*args):  # noqa: ANN002
+            counted.append(1)
+
+        try:
+            stats = collect_stats(db, IN_WINDOW)
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", count)
+        assert len(counted) == 4
+        assert stats.sent == {"linkedin": 0, "email": 0} and stats.caps == {"linkedin": 20, "email": 20}
+        assert (stats.replies, stats.interested, stats.pending_reviews, stats.channel_errors) == (0, 0, 0, 0)
 
     @pytest.mark.parametrize(
         ("now", "last", "expected"),

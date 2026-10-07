@@ -3,7 +3,7 @@ import { useState } from "react";
 import LeadDrawer from "./LeadDrawer";
 import { api, qs } from "./api";
 import type { Page, ReplyRow } from "./api";
-import { ChannelBadge, Empty, ErrorNote, PageHeader, Pagination, Spinner, StatusBadge, formatDateTime } from "./ui";
+import { ChannelBadge, Empty, ErrorNote, ListSkeleton, PageHeader, Pagination, StatusBadge, formatDateTime } from "./ui";
 
 const PAGE_SIZE = 20;
 
@@ -22,7 +22,7 @@ export default function Replies() {
     <>
       <PageHeader title="Replies" />
       <p className="mb-5 text-sm text-slate-400">Latest reply from each lead. Open one to see the whole thread.</p>
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && data.items.length === 0 && <Empty>No replies yet.</Empty>}
       {data && (

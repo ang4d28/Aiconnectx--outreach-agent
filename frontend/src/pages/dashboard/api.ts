@@ -138,6 +138,13 @@ export interface DashboardStatus {
   open_attention: Record<string, number>;
 }
 
+export interface Badges {
+  attention: number;
+  inquiries_new: number;
+  /** null unless the caller is an admin. */
+  users_pending: number | null;
+}
+
 export type ChannelState = "connected" | "needs_login" | "disabled" | "error" | "unknown";
 
 export interface ChannelStatus {
@@ -152,6 +159,8 @@ export interface ChannelStatus {
 
 export interface ChannelsPayload {
   channels: ChannelStatus[];
+  /** Channels whose Check now is still running in the background. */
+  checking: ChannelStatus["channel"][];
   linkedin_login_running: boolean;
   display_available: boolean;
   login_command: string;

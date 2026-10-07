@@ -31,6 +31,7 @@ from app.db.models import (
     ChannelType,
     Company,
     Contact,
+    Inquiry,
     Message,
     MessageDirection,
     MessageStatus,
@@ -40,6 +41,7 @@ from app.db.models import (
     ReviewStatus,
     Setting,
     User,
+    UserRole,
 )
 from app.workers.review import (
     OPEN_REVIEW,
@@ -135,33 +137,36 @@ def put_setting(db: Session, key: str, value: str) -> None:
 # ─── Status, pause, channels ───────────────────────────────
 
 
-def disabled_channels(db: Session) -> list[dict[str, str | None]]:
-    errors = list(
-        db.scalars(
-            select(AttentionItem)
-            .where(AttentionItem.type == AttentionType.CHANNEL_ERROR, AttentionItem.status == AttentionStatus.OPEN)
-            .order_by(AttentionItem.id.desc())
-            .limit(50)
-        )
-    )
+def disabled_channels(db: Session, values: dict[str, str] | None = None) -> list[dict[str, str | None]]:
+    """Channels stopped by an error (not the ones that only need a LinkedIn login: they have their own banner)."""
+    if values is None:
+        values = channel_status.read_snapshot(db, (SHEETS_DISABLED_KEY,))
+    stopped = [channel for channel, key in CHANNEL_KEYS.items() if is_truthy(values.get(key))]
     result: list[dict[str, str | None]] = []
-    for channel, key in CHANNEL_KEYS.items():
-        if not get_flag(db, key):
-            continue
-        reason = db.get(Setting, LINKEDIN_REASON_KEY) if channel == "linkedin" else None
-        if reason and reason.value == channel_status.NEEDS_LOGIN_REASON:
+    errors: list[AttentionItem] | None = None  # only fetched when a stopped channel has no stored reason
+    for channel in stopped:
+        reason = values.get(LINKEDIN_REASON_KEY) if channel == "linkedin" else None
+        if reason == channel_status.NEEDS_LOGIN_REASON:
             continue  # shown as its own "LinkedIn needs login" banner
-        text = reason.value if reason and reason.value else None
+        text = reason or None
         if text is None:
+            if errors is None:
+                errors = list(
+                    db.scalars(
+                        select(AttentionItem)
+                        .where(AttentionItem.type == AttentionType.CHANNEL_ERROR, AttentionItem.status == AttentionStatus.OPEN)
+                        .order_by(AttentionItem.id.desc())
+                        .limit(50)
+                    )
+                )
             match = next((e for e in errors if (e.payload or {}).get("channel") == channel), None)
             text = (match.payload or {}).get("error") or (match.payload or {}).get("reason") if match else None
         result.append({"channel": channel, "reason": text})
     return result
 
 
-@router.get("/status")
-def get_status(db: Session = Depends(get_session)) -> dict[str, Any]:
-    counts = {
+def open_attention_counts(db: Session) -> dict[str, int]:
+    return {
         kind.value: count
         for kind, count in db.execute(
             select(AttentionItem.type, func.count(AttentionItem.id))
@@ -169,13 +174,35 @@ def get_status(db: Session = Depends(get_session)) -> dict[str, Any]:
             .group_by(AttentionItem.type)
         ).all()
     }
+
+
+@router.get("/status")
+def get_status(db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Header state: pause, dry run and channel banners. Two queries (settings, attention counts)."""
+    values = channel_status.read_snapshot(db, (PAUSE_KEY, SHEETS_DISABLED_KEY))
     return {
-        "paused": get_flag(db, PAUSE_KEY),
+        "paused": is_truthy(values.get(PAUSE_KEY)),
         "dry_run": settings.dry_run,
-        "disabled_channels": disabled_channels(db),
-        "linkedin_needs_login": channel_status.linkedin_needs_login(db),
-        "open_attention": counts,
+        "disabled_channels": disabled_channels(db, values),
+        "linkedin_needs_login": channel_status.needs_login_from(values),
+        "open_attention": open_attention_counts(db),
     }
+
+
+@router.get("/badges")
+def get_badges(user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict[str, int | None]:
+    """The sidebar counts in one lightweight call: open attention items, new inquiries, pending accounts.
+
+    users_pending is null for everyone but admins (the Users page is admin-only).
+    """
+    attention = db.scalar(
+        select(func.count(AttentionItem.id)).where(AttentionItem.status == AttentionStatus.OPEN)
+    ) or 0
+    inquiries_new = db.scalar(select(func.count(Inquiry.id)).where(Inquiry.status == "new")) or 0
+    users_pending = None
+    if user.role == UserRole.ADMIN:
+        users_pending = db.scalar(select(func.count(User.id)).where(User.role == UserRole.PENDING)) or 0
+    return {"attention": attention, "inquiries_new": inquiries_new, "users_pending": users_pending}
 
 
 class PauseRequest(BaseModel):
@@ -232,26 +259,24 @@ def build_activity(
 
 
 def funnel_counts(db: Session) -> list[dict[str, Any]]:
-    def distinct_outreaches(*conditions: Any) -> int:
-        return db.scalar(
-            select(func.count(func.distinct(Message.outreach_id))).where(*conditions)
-        ) or 0
-
-    leads = db.scalar(select(func.count(Outreach.id))) or 0
-    drafted = distinct_outreaches(Message.direction == MessageDirection.OUTBOUND)
-    sent = distinct_outreaches(
-        Message.direction == MessageDirection.OUTBOUND, Message.status == MessageStatus.SENT
-    )
-    replied = distinct_outreaches(Message.direction == MessageDirection.INBOUND)
-    interested = db.scalar(
-        select(func.count(Outreach.id)).where(Outreach.state == OutreachState.INTERESTED)
-    ) or 0
+    """Leads to interested in two queries (one over outreaches, one over messages)."""
+    leads, interested = db.execute(
+        select(func.count(Outreach.id), func.count(Outreach.id).filter(Outreach.state == OutreachState.INTERESTED))
+    ).one()
+    outbound = Message.direction == MessageDirection.OUTBOUND
+    drafted, sent, replied = db.execute(
+        select(
+            func.count(func.distinct(Message.outreach_id)).filter(outbound),
+            func.count(func.distinct(Message.outreach_id)).filter(outbound, Message.status == MessageStatus.SENT),
+            func.count(func.distinct(Message.outreach_id)).filter(Message.direction == MessageDirection.INBOUND),
+        )
+    ).one()
     return [
-        {"stage": "Leads", "count": leads},
-        {"stage": "Drafted", "count": drafted},
-        {"stage": "Sent", "count": sent},
-        {"stage": "Replied", "count": replied},
-        {"stage": "Interested", "count": interested},
+        {"stage": "Leads", "count": leads or 0},
+        {"stage": "Drafted", "count": drafted or 0},
+        {"stage": "Sent", "count": sent or 0},
+        {"stage": "Replied", "count": replied or 0},
+        {"stage": "Interested", "count": interested or 0},
     ]
 
 
@@ -263,14 +288,17 @@ def overview(db: Session = Depends(get_session)) -> dict[str, Any]:
     start = ist_day_start(now)
     window_start = start - timedelta(days=ACTIVITY_DAYS - 1)
     stats = collect_stats(db, now)
-    cards = {
-        "leads_today": db.scalar(select(func.count(Outreach.id)).where(Outreach.created_at >= start)) or 0,
-        "drafts_pending": db.scalar(
-            select(func.count(Message.id)).where(
-                Message.direction == MessageDirection.OUTBOUND, Message.status == MessageStatus.DRAFTED
-            )
+    leads_today, drafts_pending = db.execute(
+        select(
+            select(func.count(Outreach.id)).where(Outreach.created_at >= start).scalar_subquery(),
+            select(func.count(Message.id))
+            .where(Message.direction == MessageDirection.OUTBOUND, Message.status == MessageStatus.DRAFTED)
+            .scalar_subquery(),
         )
-        or 0,
+    ).one()
+    cards = {
+        "leads_today": leads_today or 0,
+        "drafts_pending": drafts_pending or 0,
         "sent_today": stats.total_sent,
         "replies_today": stats.replies,
         "interested_today": stats.interested,

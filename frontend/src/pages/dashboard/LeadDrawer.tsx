@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { api } from "./api";
 import type { LeadDetail } from "./api";
-import { Badge, ChannelBadge, Drawer, ErrorNote, Spinner, StatusBadge, formatDateTime } from "./ui";
+import { Badge, ChannelBadge, Drawer, ErrorNote, ListSkeleton, StatusBadge, formatDateTime } from "./ui";
 
 interface Props {
   outreachId: number;
@@ -17,7 +17,7 @@ export default function LeadDrawer({ outreachId, onClose }: Props) {
 
   return (
     <Drawer title={data ? data.person : "Lead"} onClose={onClose}>
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton rows={3} />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && (
         <div className="space-y-6">

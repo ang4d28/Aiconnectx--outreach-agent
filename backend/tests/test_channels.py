@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -513,20 +514,83 @@ class TestChannelsApi:
         assert body["login_command"] == "python -m app.cli linkedin-login"
         assert body["linkedin_login_running"] is False
 
-    def test_check_now_stores_the_account(self, app, db, linkedin_on, fake_check):
-        row = client_as(app, db, UserRole.ADMIN).post("/api/channels/linkedin/check").json()
+    def wait_for_checks(self, http, timeout=5.0):
+        """Wait for the background tasks themselves (not over HTTP: the test database is one shared SQLite
+        connection, which must not be read while the task writes), then read the saved status once."""
+        deadline = time.monotonic() + timeout
+        while channels_api.checks_running() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not channels_api.checks_running(), "the background check did not finish"
+        return http.get("/api/channels/status").json()
+
+    def test_check_now_returns_at_once_and_stores_the_account(self, app, db, linkedin_on, fake_check):
+        with client_as(app, db, UserRole.ADMIN) as http:
+            response = http.post("/api/channels/linkedin/check")
+            assert response.status_code == 202 and response.json() == {"channel": "linkedin", "checking": True}
+            row = self.wait_for_checks(http)["channels"][0]
         assert (row["state"], row["account_name"]) == (CONNECTED, "Jane Doe")
         assert row["last_checked_at"]
 
+    def test_slow_check_does_not_block_the_request_or_the_status(self, app, db, linkedin_on, monkeypatch):
+        """A hanging browser check must not hold up the API: POST answers 202, GET /status keeps answering."""
+        release = threading.Event()
+
+        async def slow_check():
+            await asyncio.to_thread(release.wait, 5)
+            return SessionStatus(CONNECTED, "Jane Doe")
+
+        monkeypatch.setattr(linkedin_session, "check_session", slow_check)
+        with client_as(app, db, UserRole.ADMIN) as http:
+            started = time.monotonic()
+            assert http.post("/api/channels/linkedin/check").status_code == 202
+            assert http.post("/api/channels/linkedin/check").status_code == 202  # joins the running check
+            body = http.get("/api/channels/status").json()
+            assert time.monotonic() - started < 2
+            assert body["checking"] == ["linkedin"]
+            assert body["channels"][0]["state"] == "unknown"  # the old saved status, nothing blocked on the browser
+            release.set()
+            row = self.wait_for_checks(http)["channels"][0]
+        assert row["state"] == CONNECTED
+
     def test_check_now_needs_login_raises_the_banner(self, app, db, linkedin_on, fake_check):
         fake_check["result"] = SessionStatus(NEEDS_LOGIN, detail="login_wall")
-        http = client_as(app, db, UserRole.ADMIN)
-        assert http.post("/api/channels/linkedin/check").json()["state"] == NEEDS_LOGIN
-        channel_status.alert_reconnect.assert_awaited_once()
-        assert len(reconnect_items(db)) == 1
-        status = http.get("/api/dashboard/status").json()
+        with client_as(app, db, UserRole.ADMIN) as http:
+            assert http.post("/api/channels/linkedin/check").status_code == 202
+            assert self.wait_for_checks(http)["channels"][0]["state"] == NEEDS_LOGIN
+            channel_status.alert_reconnect.assert_awaited_once()
+            assert len(reconnect_items(db)) == 1
+            status = http.get("/api/dashboard/status").json()
         assert status["linkedin_needs_login"] is True
         assert all(c["channel"] != "linkedin" for c in status["disabled_channels"])  # its own banner instead
+
+    def test_status_endpoint_never_runs_a_check(self, app, db, linkedin_on, monkeypatch):
+        """GET /status only reads saved rows: no browser, no Outlook token refresh, no WhatsApp request."""
+        boom = AsyncMock(side_effect=AssertionError("a real check ran during GET /status"))
+        monkeypatch.setattr(linkedin_session, "check_session", boom)
+        monkeypatch.setattr(linkedin_session, "interactive_login", boom)
+        monkeypatch.setattr(channel_status, "check_whatsapp", boom)
+        monkeypatch.setattr(channel_status, "check_outlook", boom)
+        monkeypatch.setattr(channel_status, "_outlook_silent", lambda: (_ for _ in ()).throw(AssertionError("outlook")))
+        http = client_as(app, db, UserRole.ADMIN)
+        for _ in range(3):
+            assert http.get("/api/channels/status").status_code == 200
+        boom.assert_not_called()
+
+    def test_status_endpoint_is_one_settings_query(self, app, db, linkedin_on):
+        from sqlalchemy import event
+
+        http = client_as(app, db, UserRole.ADMIN)
+        statements = []
+
+        def record(conn, cursor, statement, *rest):  # noqa: ANN002
+            statements.append(statement)
+
+        event.listen(db.get_bind(), "before_cursor_execute", record)
+        try:
+            http.get("/api/channels/status")
+        finally:
+            event.remove(db.get_bind(), "before_cursor_execute", record)
+        assert len([q for q in statements if "FROM settings" in q]) == 1
 
     def test_banner_flag_is_visible_to_viewers(self, app, db, linkedin_on):
         channel_status.apply_linkedin(db, SessionStatus(NEEDS_LOGIN), NOW)
@@ -534,10 +598,11 @@ class TestChannelsApi:
 
     def test_check_other_channels(self, app, db, monkeypatch):
         monkeypatch.setattr(channel_status, "check_whatsapp", AsyncMock(return_value=SessionStatus(CONNECTED, "Biz")))
-        http = client_as(app, db, UserRole.ADMIN)
-        row = http.post("/api/channels/whatsapp/check").json()
-        assert (row["channel"], row["state"], row["account_name"]) == ("whatsapp", CONNECTED, "Biz")
-        assert http.post("/api/channels/telegram/check").status_code == 404
+        with client_as(app, db, UserRole.ADMIN) as http:
+            assert http.post("/api/channels/whatsapp/check").status_code == 202
+            rows = {c["channel"]: c for c in self.wait_for_checks(http)["channels"]}
+            assert (rows["whatsapp"]["state"], rows["whatsapp"]["account_name"]) == (CONNECTED, "Biz")
+            assert http.post("/api/channels/telegram/check").status_code == 404
 
     def test_connect_without_a_display_explains_the_cli(self, app, db, linkedin_on, monkeypatch):
         monkeypatch.setattr(channels_api, "has_display", lambda: False)

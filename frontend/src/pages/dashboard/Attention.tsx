@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/auth";
 import { api, qs } from "./api";
 import type { AttentionItem, Page } from "./api";
-import { Badge, Card, Empty, ErrorNote, PageHeader, Pagination, Spinner, formatDateTime, titleCase, toast } from "./ui";
+import { Badge, Card, Empty, ErrorNote, ListSkeleton, PageHeader, Pagination, formatDateTime, titleCase, toast } from "./ui";
 import type { Tone } from "./ui";
 
 type Filter = "all" | AttentionItem["type"];
@@ -179,6 +179,7 @@ export default function Attention() {
   const refresh = () => {
     client.invalidateQueries({ queryKey: ["attention"] });
     client.invalidateQueries({ queryKey: ["status"] });
+    client.invalidateQueries({ queryKey: ["badges"] });
     client.invalidateQueries({ queryKey: ["drafts"] });
   };
 
@@ -202,7 +203,7 @@ export default function Attention() {
         ))}
       </div>
 
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && data.items.length === 0 && <Empty>All clear. Nothing needs you right now.</Empty>}
       {data && (

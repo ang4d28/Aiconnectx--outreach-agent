@@ -5,7 +5,7 @@ import { useAuth } from "../auth/auth";
 import LeadDrawer from "./LeadDrawer";
 import { api, qs } from "./api";
 import type { Lead, Page, SheetInfo } from "./api";
-import { ChannelBadge, Empty, ErrorNote, PageHeader, Pagination, Spinner, StatusBadge, formatDateTime, titleCase, toast } from "./ui";
+import { ChannelBadge, Empty, ErrorNote, ListSkeleton, PageHeader, Pagination, StatusBadge, formatDateTime, titleCase, toast } from "./ui";
 
 const STATUSES = [
   "new", "qualified", "targeted", "enriched", "drafted", "connect_sent", "connected", "dm_sent", "contacted",
@@ -158,7 +158,7 @@ export default function Leads() {
         </div>
       </form>
 
-      {isLoading && <Spinner />}
+      {isLoading && <ListSkeleton rows={8} />}
       {error && <ErrorNote error={error} retry={() => refetch()} />}
       {data && data.items.length === 0 && <Empty>No leads match these filters.</Empty>}
 

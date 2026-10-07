@@ -22,7 +22,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Mapping
 
 import httpx
 from sqlalchemy import select
@@ -68,8 +68,7 @@ def _put(db: Session, key: str, value: str) -> None:
         row.value = value
 
 
-def load_status(db: Session, channel: str) -> dict[str, Any] | None:
-    raw = _get(db, STATUS_PREFIX + channel)
+def _parse(raw: str | None) -> dict[str, Any] | None:
     if not raw:
         return None
     try:
@@ -77,6 +76,24 @@ def load_status(db: Session, channel: str) -> dict[str, Any] | None:
     except ValueError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def load_status(db: Session, channel: str) -> dict[str, Any] | None:
+    return _parse(_get(db, STATUS_PREFIX + channel))
+
+
+# Every settings row the status rows depend on, read together in one query.
+SNAPSHOT_KEYS = (
+    *(STATUS_PREFIX + channel for channel in CHANNELS),
+    LINKEDIN_DISABLED_KEY,
+    LINKEDIN_REASON_KEY,
+    EMAIL_DISABLED_KEY,
+)
+
+
+def read_snapshot(db: Session, extra_keys: tuple[str, ...] = ()) -> dict[str, str]:
+    keys = (*SNAPSHOT_KEYS, *extra_keys)
+    return {row.key: row.value for row in db.scalars(select(Setting).where(Setting.key.in_(keys)))}
 
 
 def save_status(db: Session, channel: str, status: SessionStatus, now: datetime) -> dict[str, Any]:
@@ -120,12 +137,12 @@ def _row(channel: str, stored: dict[str, Any] | None, **override: Any) -> dict[s
     return row
 
 
-def linkedin_status(db: Session) -> dict[str, Any]:
-    stored = load_status(db, "linkedin")
+def linkedin_row(values: Mapping[str, str]) -> dict[str, Any]:
+    stored = _parse(values.get(STATUS_PREFIX + "linkedin"))
     if not settings.linkedin_enabled:
         return _row("linkedin", stored, state=DISABLED, detail="Switched off (LINKEDIN_ENABLED=false)")
-    if is_truthy(_get(db, LINKEDIN_DISABLED_KEY)):
-        reason = _get(db, LINKEDIN_REASON_KEY) or ""
+    if is_truthy(values.get(LINKEDIN_DISABLED_KEY)):
+        reason = values.get(LINKEDIN_REASON_KEY) or ""
         if reason == NEEDS_LOGIN_REASON:
             return _row("linkedin", stored, state=NEEDS_LOGIN)
         return _row("linkedin", stored, state=DISABLED, detail=f"Stopped: {reason.replace('_', ' ')}" if reason else "Stopped after errors")
@@ -134,12 +151,12 @@ def linkedin_status(db: Session) -> dict[str, Any]:
     return _row("linkedin", stored)
 
 
-def outlook_status(db: Session) -> dict[str, Any]:
+def outlook_row(values: Mapping[str, str]) -> dict[str, Any]:
     from app.channels.outlook import OutlookSettings
 
-    stored = load_status(db, "outlook")
+    stored = _parse(values.get(STATUS_PREFIX + "outlook"))
     cfg = OutlookSettings()
-    if is_truthy(_get(db, EMAIL_DISABLED_KEY)):
+    if is_truthy(values.get(EMAIL_DISABLED_KEY)):
         return _row("outlook", stored, state=DISABLED, detail="Stopped after errors")
     if not cfg.ms_client_id:
         return _row("outlook", stored, state=ERROR, detail="MS_CLIENT_ID is not set")
@@ -148,19 +165,37 @@ def outlook_status(db: Session) -> dict[str, Any]:
     return _row("outlook", stored)
 
 
-def whatsapp_status(db: Session) -> dict[str, Any]:
-    stored = load_status(db, "whatsapp")
+def whatsapp_row(values: Mapping[str, str]) -> dict[str, Any]:
+    stored = _parse(values.get(STATUS_PREFIX + "whatsapp"))
     if not settings.whatsapp_phone_number_id or not settings.whatsapp_token:
         return _row("whatsapp", stored, state=ERROR, detail="WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set")
     return _row("whatsapp", stored)
 
 
+def linkedin_status(db: Session) -> dict[str, Any]:
+    return linkedin_row(read_snapshot(db))
+
+
+def outlook_status(db: Session) -> dict[str, Any]:
+    return outlook_row(read_snapshot(db))
+
+
+def whatsapp_status(db: Session) -> dict[str, Any]:
+    return whatsapp_row(read_snapshot(db))
+
+
 def all_statuses(db: Session) -> list[dict[str, Any]]:
-    return [linkedin_status(db), outlook_status(db), whatsapp_status(db)]
+    """Saved status only: three rows from one query, no browser and no network call."""
+    values = read_snapshot(db)
+    return [linkedin_row(values), outlook_row(values), whatsapp_row(values)]
+
+
+def needs_login_from(values: Mapping[str, str]) -> bool:
+    return linkedin_row(values)["state"] == NEEDS_LOGIN
 
 
 def linkedin_needs_login(db: Session) -> bool:
-    return linkedin_status(db)["state"] == NEEDS_LOGIN
+    return needs_login_from(read_snapshot(db))
 
 
 # ─── Applying a LinkedIn result ────────────────────────────

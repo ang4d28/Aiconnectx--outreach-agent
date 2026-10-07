@@ -77,12 +77,14 @@ def is_unsent(message: Message | None) -> bool:
 @router.get("", response_model=list[AttentionRead])
 def list_attention(
     status_filter: AttentionStatus | None = Query(AttentionStatus.OPEN, alias="status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
     db: Session = Depends(get_session),
 ) -> list[AttentionRead]:
     stmt = select(AttentionItem).order_by(AttentionItem.id.desc())
     if status_filter is not None:
         stmt = stmt.where(AttentionItem.status == status_filter)
-    return [to_read(item) for item in db.scalars(stmt)]
+    return [to_read(item) for item in db.scalars(stmt.offset(skip).limit(limit))]
 
 
 @router.post("/{item_id}/approve", response_model=AttentionRead)
