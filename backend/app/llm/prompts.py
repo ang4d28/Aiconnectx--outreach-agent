@@ -93,32 +93,64 @@ Also extract any:
 - Email addresses provided"""
 
 
-def draft_message_prompt(channel: str, target_info: dict, context: dict) -> str:
-    """Prompt for drafting outreach messages."""
-    return f"""Draft a {channel} message for university placement outreach.
+def draft_message_prompt(
+    channel: str,
+    target_info: dict,
+    context: dict,
+    sender: dict | None = None,
+    facts: str = "",
+    retry_reason: str = "",
+    instruction: str = "",
+) -> str:
+    """Prompt for drafting an outreach message. The code adds the greeting and the signature.
 
-TARGET INFO:
+    instruction is an optional style request from the owner ("make it shorter"); it never overrides the rules."""
+    sender = sender or {}
+    org = sender.get("org", "AI ConnectX")
+    university = sender.get("university", "Universal AI University")
+    has_post = context.get("has_post", "yes" if context.get("post_context") else "no") == "yes"
+    post_rule = (
+        f"- Refer to this hiring post or role once, naturally: {context.get('post_context', '')}"
+        if has_post
+        else "- There is no hiring post for this lead: do not mention any post, role or vacancy"
+    )
+    facts_block = facts.strip() or "(none: make no claims about the organisation beyond its name and the ask)"
+    retry = (
+        f"\nYOUR PREVIOUS DRAFT WAS REJECTED: {retry_reason}. Write a new draft that fixes this.\n"
+        if retry_reason
+        else ""
+    )
+    owner_request = (
+        f"\nOWNER'S STYLE REQUEST (tone and length only; every rule below still applies): {instruction.strip()}\n"
+        if instruction.strip()
+        else ""
+    )
+    return f"""Write a short {channel} outreach message.
+
+SENDER (the person writing; write in the first person, "I" or "we"):
+- The {org} team, the placement outreach initiative of {university}
+- The sender is NOT the recipient and has no connection to the recipient's company.
+
+RECIPIENT (the person receiving the message; address them as "you"):
 - Name: {target_info.get('name', 'N/A')}
 - Title: {target_info.get('title', 'N/A')}
 - Company: {target_info.get('company', 'N/A')}
+- Company size: {context.get('company_size', 'Unknown')}
 
-CONTEXT:
-- Post/Role: {context.get('post_context', 'General outreach')}
-- Company Size: {context.get('company_size', 'Unknown')}
+FACTS (the only claims you may make about {org} and {university}):
+{facts_block}
+{retry}{owner_request}
+RULES:
+- Use only facts from the FACTS section. No invented statistics, numbers, rankings, "premier" or "leading", no promises or guarantees.
+- Mention {university} by name once.
+- Never say or imply that the sender holds the recipient's title or works at the recipient's company; the recipient does.
+{post_rule}
+- 50 to 90 words in the body, one clear ask (a short call, a meeting or a reply), professional but warm.
+- Do not write a greeting or a name line (no "Hi ...", no "Dear ...") and no signature or closing: the system adds both.
+- No placeholders of any kind: no square brackets, no curly braces, no "Your Name".
+- No generic template language, nothing salesy, one ask only.
 
-REQUIREMENTS:
-- Under 80 words
-- Professional but warm tone
-- Reference the specific post/role if available
-- Pitch: "AI ConnectX connects companies with top B.Tech AI/ML students from leading universities"
-- Mention MoU opportunity for structured partnerships
-- One clear ask (call, meeting, or more info)
-- Personalize to their role and company
-
-AVOID:
-- Generic templates
-- Overly salesy language
-- Multiple asks in one message"""
+Return JSON with "subject" (at most 8 words, no brackets) and "message" (the body only)."""
 
 
 def classify_company_prompt(company_name: str, company_info: str) -> str:

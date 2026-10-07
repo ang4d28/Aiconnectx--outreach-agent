@@ -168,6 +168,7 @@ class MessageBase(BaseModel):
     direction: MessageDirection
     content: str
     status: MessageStatus = MessageStatus.DRAFTED
+    subject: Optional[str] = Field(None, max_length=200)
 
 
 class MessageCreate(MessageBase):

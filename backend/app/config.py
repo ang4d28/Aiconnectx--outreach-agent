@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     ollama_url: str = "https://ollama.com"
     ollama_api_key: str = ""
     ollama_model: str = "llama3.2"
+    # Optional: tried once when the model above is retired (404 or "no longer available")
+    groq_model_fallback: str = ""
+    gemini_model_fallback: str = ""
+    # Seconds to wait for a response, per provider (Gemini is slowest, especially with thinking models)
+    gemini_timeout_seconds: float = 60
+    groq_timeout_seconds: float = 30
+    ollama_timeout_seconds: float = 60
 
     # LinkedIn (persistent Playwright profile; manual first login, no password stored).
     # LINKEDIN_ENABLED=false keeps the channel off whatever the session state.
@@ -64,6 +71,7 @@ class Settings(BaseSettings):
     linkedin_headless: bool = True
 
     # Outlook (Microsoft Graph) is the only email channel
+    ms_client_id: str = ""
     ms_token_cache_path: str = "secrets/ms_token.json"
 
     # Sandbox: comma-separated email addresses. When set, email goes only to these (blocked by sandbox otherwise).
@@ -76,6 +84,13 @@ class Settings(BaseSettings):
     whatsapp_app_secret: str = ""
     whatsapp_owner_number: str = ""
     hold_window_minutes: int = 10
+
+    # Who the outreach comes from. The code appends the signature from these; the LLM never writes it.
+    sender_name: str = ""
+    sender_title: str = ""
+    org_name: str = "AI ConnectX"
+    university_name: str = "Universal AI University"
+    sender_contact: str = ""
 
     # Training & Placement Officer details shared with interested companies
     tpo_name: str = ""
@@ -134,3 +149,31 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+WATCHED_MODEL_VARS = ("GEMINI_MODEL", "GROQ_MODEL", "OLLAMA_MODEL")
+
+
+def env_overrides(
+    env_file: str | None = ENV_FILE, environ: "os._Environ[str] | dict[str, str] | None" = None
+) -> list[str]:
+    """Model variables set in the OS environment and in .env with different values. The OS environment wins
+    over .env, which is surprising when an old export is still in the shell. Names only, never values."""
+    environ = os.environ if environ is None else environ
+    if not env_file or not Path(env_file).is_file():
+        return []
+    from dotenv import dotenv_values
+
+    in_file = dotenv_values(env_file)
+    return [
+        name
+        for name in WATCHED_MODEL_VARS
+        if name in environ and in_file.get(name) is not None and environ[name] != in_file[name]
+    ]
+
+
+def warn_env_overrides() -> None:
+    for name in env_overrides():
+        logging.getLogger(__name__).warning(
+            f"{name} is set in the OS environment and in .env with different values; "
+            f"the OS environment wins. Unset it in the shell or make the two agree."
+        )

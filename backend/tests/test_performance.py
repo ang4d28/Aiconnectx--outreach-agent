@@ -119,7 +119,8 @@ class TestIndexes:
             (table, name, tuple(c.strip().strip('"') for c in cols.split(",")))
             for name, table, cols in re.findall(r'create_index\("(\w+)", "(\w+)", \[([^\]]*)\]', upgrade)
         }
-        assert created == self.model_indexes()
+        # draft_versions is a later table: its index is created by 012_draft_versions, not by this migration.
+        assert created == {ix for ix in self.model_indexes() if ix[0] != "draft_versions"}
         downgrade = source[source.index("def downgrade"):]
         assert set(re.findall(r'drop_index\("(\w+)"', downgrade)) == {name for _t, name, _c in created}
 

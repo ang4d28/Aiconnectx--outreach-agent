@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app import redact
 from app.api.main import api_router
 from app.api.whatsapp_webhook import set_handler
 from app.auth.oauth import install_session_middleware
+from app.config import warn_env_overrides
 from app.sandbox import startup_line
 from app.timing import TimingMiddleware, configure_logging
 from app.workers.review import ReviewCommands
@@ -31,6 +33,8 @@ def apply_saved_settings() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    redact.install()
+    warn_env_overrides()
     set_handler(ReviewCommands())
     apply_saved_settings()
     logging.getLogger(__name__).info(startup_line())

@@ -459,7 +459,7 @@ class SendQueue:
                 return await self.linkedin.send_connection_note(contact.linkedin_url, text)
             return await self.linkedin.send_dm(contact.linkedin_url, text)
         company = repository.get_company(self.db, contact.company_id)
-        subject = build_subject(company.name if company else None)
+        subject = message.subject or build_subject(company.name if company else None)
         return await self.client.send_email(
             contact.email, subject, text, self._thread_for(outreach.id)
         )

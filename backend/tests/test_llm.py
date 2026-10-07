@@ -259,7 +259,7 @@ class TestPrompts:
         assert "HR Manager" in prompt
         assert "TechCorp" in prompt
         assert "AI Engineer position" in prompt
-        assert "Under 80 words" in prompt
+        assert "50 to 90 words" in prompt
         assert "AI ConnectX" in prompt
 
     def test_post_extraction_result_schema(self):

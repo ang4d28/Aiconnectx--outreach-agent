@@ -31,6 +31,7 @@ from app.db.models import (
     ChannelType,
     Company,
     Contact,
+    DraftVersion,
     Inquiry,
     Message,
     MessageDirection,
@@ -464,6 +465,9 @@ def draft_row(message: Message, outreach: Outreach, contact: Contact, company: C
         "edited": bool(message.edited_text),
         "hold_until": iso(message.hold_until),
         "is_reply": outreach.state in REPLY_STATES,
+        "subject": message.subject,
+        "regenerated_at": iso(message.regenerated_at),
+        "has_previous": False,  # filled in by list_drafts with one query for the page
         "created_at": iso(message.created_at),
     }
 
@@ -474,7 +478,13 @@ def list_drafts(
     view: DraftView = "awaiting",
     db: Session = Depends(get_session),
 ) -> dict[str, Any]:
-    return paginate(db, drafts_statement(view), pg, draft_row)
+    page = paginate(db, drafts_statement(view), pg, draft_row)
+    ids = [row["id"] for row in page["items"]]
+    if ids:
+        with_versions = set(db.scalars(select(DraftVersion.draft_id).where(DraftVersion.draft_id.in_(ids)).distinct()))
+        for row in page["items"]:
+            row["has_previous"] = row["id"] in with_versions
+    return page
 
 
 def get_draft_or_404(db: Session, draft_id: int) -> Message:

@@ -3,6 +3,9 @@
     python -m app.cli create-admin --email owner@example.com
     python -m app.cli test-channel outlook --to you@example.com
     python -m app.cli linkedin-login
+    python -m app.cli test-llm
+    python -m app.cli doctor
+    python -m app.cli run-job <post_monitor|enrich|draft|send_queue|release_held|replies|followups|sheets>
 
 This is the only way to create an admin. OAuth sign-ins and registrations always start as
 `pending`, and no email claim from Microsoft ever grants a role.
@@ -144,7 +147,145 @@ async def run_linkedin_login(login: Callable[[], Awaitable[Any]] | None = None) 
     return 1
 
 
+async def _job_enrich() -> dict[str, int]:
+    """The targeting half of the company finder: NEW posts become ENRICHED outreaches (no drafting)."""
+    from collections import Counter
+
+    from app import scheduler
+    from app.workers.pipeline import Pipeline
+
+    async def work(db: Any) -> dict[str, int]:
+        pipeline = Pipeline(db=db)
+        counts: Counter[str] = Counter()
+        for post in pipeline._new_posts():
+            try:
+                counts[await pipeline.process_post(post)] += 1
+            except Exception as exc:
+                db.rollback()
+                counts["failed"] += 1
+                print(f"  post {post.id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return {"targeted": counts["targeted"], "skipped": counts["skipped"], "failed": counts["failed"]}
+
+    return await scheduler.in_session(work)
+
+
+async def _job_draft() -> int:
+    """The drafter alone: ENRICHED outreaches get a first message. Returns the number of drafts."""
+    from app import scheduler
+    from app.workers.drafter import Drafter
+
+    return await scheduler.in_session(lambda db: Drafter(db=db).run_once())
+
+
+async def _job_draft_force(outreach_ids: list[int] | None) -> Any:
+    """Discard unsent drafts (the given outreaches, or all unsent demo leads), back to ENRICHED, draft again.
+    Never touches a lead with a sent or received message."""
+    from app import scheduler
+    from app.workers.drafter import force_redraft
+
+    result = await scheduler.in_session(lambda db: force_redraft(db, outreach_ids))
+    for outreach_id, why in result.refused:
+        print(f"  refused outreach #{outreach_id}: {why}", file=sys.stderr)
+    if result.refused and outreach_ids and not (result.drafted or result.discarded):
+        raise CliError("nothing was regenerated")
+    return {"discarded": result.discarded, "drafted": result.drafted, "refused": len(result.refused)}
+
+
+def _scheduler_body(name: str, *args: Any) -> Callable[[], Awaitable[Any]]:
+    """The scheduler's own job body, looked up when it runs (the scheduler import is heavy)."""
+
+    def call() -> Awaitable[Any]:
+        from app import scheduler
+
+        return getattr(scheduler, name)(*args)
+
+    return call
+
+
+RUN_JOBS: dict[str, Callable[[], Awaitable[Any]]] = {
+    "post_monitor": _scheduler_body("run_post_monitor"),
+    "enrich": _job_enrich,
+    "draft": _job_draft,
+    "send_queue": _scheduler_body("run_send_queue", True),
+    "release_held": _scheduler_body("run_send_queue", False),
+    "replies": _scheduler_body("run_replies"),
+    "followups": _scheduler_body("run_followups"),
+    "sheets": _scheduler_body("run_sheets_sync"),
+}
+
+
+def _describe(result: Any) -> str:
+    import dataclasses
+
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        result = dataclasses.asdict(result)
+    if isinstance(result, dict):
+        return ", ".join(f"{key}={value}" for key, value in result.items()) or "nothing to do"
+    return "nothing to do" if result is None else str(result)
+
+
+async def run_job(name: str, force: bool = False, outreach_ids: list[int] | None = None) -> int:
+    """Run one scheduler job body once, now, without the schedule, the failure counters or the send-window gate
+    in guarded() (the workers still apply their own window, caps, hold and DRY_RUN rules). Prints the counts
+    and any error; returns the exit code. `draft --force` redoes unsent drafts (see _job_draft_force)."""
+    from app import sandbox, scheduler
+
+    if (force or outreach_ids) and name != "draft":
+        print("FAILED: --force and --outreach-id only apply to the draft job", file=sys.stderr)
+        return 2
+    if outreach_ids and not force:
+        print("FAILED: --outreach-id needs --force", file=sys.stderr)
+        return 2
+    print(sandbox.startup_line())
+    scheduler.monitor().apply_overrides()  # dashboard settings (DRY_RUN, caps ...) like a scheduled run
+    try:
+        result = await (_job_draft_force(outreach_ids) if force else RUN_JOBS[name]())
+    except Exception as exc:
+        print(f"FAILED {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(f"OK {name}: {_describe(result)}")
+    return 0
+
+
+async def run_test_llm() -> int:
+    """One tiny request per provider that has a key, with its configured model. Never prints a key."""
+    from app.config import settings
+    from app.llm.client import llm_client
+    from app.redact import redact
+
+    providers = (
+        ("groq", settings.groq_api_key, settings.groq_model),
+        ("gemini", settings.gemini_api_key, settings.gemini_model),
+        ("ollama", settings.ollama_api_key, settings.ollama_model),
+    )
+    import time
+
+    failed = tested = 0
+    for name, key, model in providers:
+        if not key:
+            print(f"SKIPPED {name}: no API key set")
+            continue
+        tested += 1
+        started = time.perf_counter()
+        try:
+            used = await llm_client.ping(name)
+        except Exception as exc:
+            failed += 1
+            print(f"FAIL {name} ({model}) after {time.perf_counter() - started:.1f}s: {redact(exc)}", file=sys.stderr)
+        else:
+            note = "" if used == model else f" [fallback: configured model {model} is retired]"
+            print(f"OK {name} ({used}) {time.perf_counter() - started:.1f}s{note}")
+    if not tested:
+        print("No provider has an API key (GROQ_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY).", file=sys.stderr)
+    return 1 if failed or not tested else 0
+
+
 def main(argv: Sequence[str] | None = None, prompt: Prompt = getpass.getpass) -> int:
+    from app import redact
+    from app.config import warn_env_overrides
+
+    redact.install()
+    warn_env_overrides()
     parser = argparse.ArgumentParser(prog="python -m app.cli", description=__doc__.split("\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     admin = commands.add_parser("create-admin", help="create an admin account (prompts for a password)")
@@ -154,7 +295,30 @@ def main(argv: Sequence[str] | None = None, prompt: Prompt = getpass.getpass) ->
     test.add_argument("channel", choices=CHANNELS)
     test.add_argument("--to", required=True, help="email address (outlook) or phone number (whatsapp)")
     commands.add_parser("linkedin-login", help="sign in to LinkedIn in a visible browser (waits up to 5 minutes)")
+    commands.add_parser("test-llm", help="send one tiny request to each LLM provider that has a key")
+    commands.add_parser("doctor", help="table of OK/FAIL/SKIPPED for the database, channels and settings")
+    job = commands.add_parser("run-job", help="run one scheduler job once, now, and print what it did")
+    job.add_argument("job", choices=list(RUN_JOBS))
+    job.add_argument(
+        "--force",
+        action="store_true",
+        help="draft only: discard unsent drafts (never a sent message), return the leads to ENRICHED, draft again",
+    )
+    job.add_argument(
+        "--outreach-id", type=int, action="append", help="with --force: only this outreach (repeatable); default is all unsent demo leads"
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "test-llm":
+        return asyncio.run(run_test_llm())
+
+    if args.command == "doctor":
+        from app.doctor import run_doctor
+
+        return run_doctor()
+
+    if args.command == "run-job":
+        return asyncio.run(run_job(args.job, args.force, args.outreach_id))
 
     if args.command == "linkedin-login":
         return asyncio.run(run_linkedin_login())

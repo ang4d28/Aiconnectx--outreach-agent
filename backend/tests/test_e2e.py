@@ -42,6 +42,14 @@ from app.db.models import (
 from app.llm.client import llm_client
 from app.llm.prompts import CompanyClassificationResult, ReplyClassificationResult
 from app.workers.drafter import Drafter, DraftedMessage
+
+# Passes the drafter's validation (50 to 90 words, no placeholders).
+DRAFT_BODY = (
+    "{name}, I lead outreach for the AI ConnectX team at Universal AI University, where our B.Tech AI and ML "
+    "students are looking for internships and entry level roles. We connect companies with these students and "
+    "would value a short call to learn what your team needs and whether a structured partnership through an "
+    "MoU could help both sides. Would you be open to a fifteen minute conversation this week?"
+)
 from app.workers.enrichment import EnrichmentWorker
 from app.workers.pipeline import Pipeline
 from app.workers.replies import ReplyWorker
@@ -91,7 +99,9 @@ class FakeLLM:
         self.calls.append(schema.__name__)
         if schema is DraftedMessage:
             name = re.search(r"- Name: (.+)", prompt).group(1)
-            return DraftedMessage(message=f"Hi {name.split()[0]}, AI ConnectX connects companies with AI/ML students. Open to a call?")
+            if "short linkedin" in prompt:  # a connection note must stay under 200 characters
+                return DraftedMessage(message=f"Hi {name.split()[0]}, AI ConnectX connects companies with AI/ML students. Open to a call?")
+            return DraftedMessage(subject="Student hiring partnership", message=DRAFT_BODY.format(name=name.split()[0]))
         if schema is CompanyClassificationResult:
             return CompanyClassificationResult(company_type="mid_tier", reasoning="test")
         if schema is ReplyClassificationResult:

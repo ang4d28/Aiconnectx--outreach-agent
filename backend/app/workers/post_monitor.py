@@ -293,6 +293,11 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     
+    from app import redact
+    from app.config import warn_env_overrides
+
+    redact.install()
+    warn_env_overrides()
     logger.info("Running post monitor...")
     result = asyncio.run(run_once())
     

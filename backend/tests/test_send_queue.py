@@ -87,7 +87,7 @@ class TestGuardrailHelpers:
 
 def make_message(msg_id: int, outreach_id: int, held=True, review=ReviewStatus.PENDING_REVIEW):
     return SimpleNamespace(
-        id=msg_id, outreach_id=outreach_id, content="Hello", edited_text=None,
+        id=msg_id, outreach_id=outreach_id, content="Hello", edited_text=None, subject=None,
         status=MessageStatus.APPROVED, review_status=review,
         hold_until=IN_WINDOW - timedelta(minutes=1) if held else None,
         whatsapp_message_id=None, reviewed_at=None,

@@ -50,6 +50,7 @@ def test_build_context_defaults():
     assert build_context(None, None) == {
         "post_context": "General outreach",
         "company_size": "Unknown",
+        "has_post": "no",
     }
 
 
@@ -79,7 +80,7 @@ class TestDrafter:
         ) as create_o, patch.object(
             repo, "create_message"
         ) as create_m, patch.object(
-            drafter, "draft_message", AsyncMock(return_value="hello")
+            drafter, "draft_message", AsyncMock(return_value=drafter.Draft("Talent partnership", "hello"))
         ):
             count = await Drafter(db=MagicMock()).draft_outreach(outreach)
         assert count == 2
@@ -87,6 +88,9 @@ class TestDrafter:
         assert create_m.call_count == 2
         for call in create_m.call_args_list:
             assert call.args[1].status == MessageStatus.DRAFTED
+            assert call.args[1].content.startswith("Hi Jane,\n\nhello\n\nRegards,")
+        subjects = {c.args[1].subject for c in create_m.call_args_list}
+        assert subjects == {None, "Talent partnership"}  # only the email draft keeps a subject
         states = [c.args[2].state for c in upd.call_args_list if c.args[2].state]
         assert states == [OutreachState.DRAFTED, OutreachState.DRAFTED]
 
@@ -110,10 +114,11 @@ class TestDrafter:
     @pytest.mark.asyncio
     async def test_draft_message_calls_llm(self):
         llm = MagicMock()
-        llm.complete_json = AsyncMock(return_value=drafter.DraftedMessage(message=" Hi "))
+        body = " ".join(["word"] * 60)
+        llm.complete_json = AsyncMock(return_value=drafter.DraftedMessage(message=f" {body} "))
         with patch.object(drafter, "llm_client", llm):
             out = await drafter.draft_message(ChannelType.EMAIL, {"name": "J"}, {})
-        assert out == "Hi"
+        assert out == drafter.Draft(subject="", body=body)
 
 
 class TestDraftsApi:

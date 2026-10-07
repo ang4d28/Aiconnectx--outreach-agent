@@ -317,17 +317,39 @@ class Message(Base):
         nullable=False,
     )
     edited_text: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(200))  # email subject generated with the draft
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     whatsapp_message_id: Mapped[str | None] = mapped_column(String(255))
     # Dashboard user who last approved, cancelled or edited it (empty for WhatsApp and automatic actions).
     reviewed_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL")
     )
+    regenerated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     outreach: Mapped["Outreach"] = relationship(back_populates="messages")
+
+
+class DraftVersion(Base):
+    """Earlier text of a draft, kept when it is regenerated or a version is restored."""
+
+    __tablename__ = "draft_versions"
+    __table_args__ = (Index("ix_draft_versions_draft_id", "draft_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class Setting(Base):

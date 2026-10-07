@@ -222,7 +222,27 @@ export interface Draft {
   edited: boolean;
   hold_until: string | null;
   is_reply: boolean;
+  subject: string | null;
+  regenerated_at: string | null;
+  has_previous: boolean;
   created_at: string | null;
+}
+
+export interface DraftVersion {
+  id: number;
+  text: string;
+  subject: string | null;
+  created_at: string | null;
+  created_by: number | null;
+}
+
+export interface RegenerateJob {
+  job_id: string;
+  status: "running" | "finished";
+  total: number;
+  done: number;
+  failed: number;
+  errors: { id: number; reason: string }[];
 }
 
 export interface ReplyRow {

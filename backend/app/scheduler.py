@@ -38,7 +38,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.channels.linkedin import DISABLED_KEY as LINKEDIN_DISABLED_KEY
 from app.channels.linkedin import LinkedInError
 from app.channels.outlook import GraphError, OutlookAuthError
-from app.config import settings
+from app.channel_config import missing_settings, unregistered_jobs
+from app import redact
+from app.config import settings, warn_env_overrides
 from app.db import SessionLocal
 from app.db.models import AttentionItem, AttentionType, Setting
 from app.workers.send_queue import EMAIL_DISABLED_KEY, in_send_window, is_truthy, parse_hhmm, utc_now
@@ -381,7 +383,7 @@ def build_specs() -> list[JobSpec]:
     tz = settings.send_window_tz
     first, last = window_hours()
     hours = f"{first}-{last}"
-    return [
+    specs = [
         JobSpec("post_monitor", job_post_monitor, IntervalTrigger(minutes=POST_MONITOR_MINUTES, timezone=tz)),
         JobSpec("company_finder", job_company_finder, CronTrigger(hour=8, minute=0, timezone=tz), DAILY_GRACE),
         JobSpec("send_queue", job_send_queue, CronTrigger(hour=hours, minute="*/10", timezone=tz)),
@@ -393,6 +395,8 @@ def build_specs() -> list[JobSpec]:
         JobSpec("sheets_sync", job_sheets_sync, CronTrigger(minute="15,45", timezone=tz)),
         JobSpec("daily_summary", job_daily_summary, CronTrigger(hour=20, minute=0, timezone=tz), DAILY_GRACE),
     ]
+    skipped = unregistered_jobs()  # a channel with missing settings gets none of its own jobs
+    return [spec for spec in specs if spec.id not in skipped]
 
 
 def build_scheduler(jobstore_url: str | None = None) -> AsyncIOScheduler:
@@ -452,6 +456,8 @@ async def serve() -> None:
     if removed:
         logger.info(f"Removed stale jobs: {', '.join(removed)}")
     logger.info(startup_line())
+    for job, channel in unregistered_jobs().items():
+        logger.warning(f"Job {job} not registered: {channel} settings missing ({', '.join(missing_settings(channel))})")
     for line in describe(scheduler):
         logger.info(f"  {line}")
 
@@ -480,6 +486,8 @@ async def check() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    redact.install()
+    warn_env_overrides()
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     asyncio.run(check() if "--check" in sys.argv[1:] else serve())
 

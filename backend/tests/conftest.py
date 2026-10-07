@@ -54,6 +54,7 @@ TEST_ENV: dict[str, str] = {
     "TPO_NAME": "Dr. Test Officer",
     "TPO_PHONE": "+91 90000 00000",
     "TPO_EMAIL": "tpo@university.invalid",
+    "SENDER_NAME": "Test Sender",  # the drafter refuses to start without it
     # Dashboard auth (the OAuth client ids are dummies; the tests fake the providers)
     "JWT_SECRET": "test-jwt-secret-0123456789abcdef0123456789",
     "MS_AUTH_CLIENT_ID": "test-ms-auth-client-id",
